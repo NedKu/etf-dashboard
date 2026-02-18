@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "etf-dashboard"
+version = "0.1.0"
+description = "Evidence-first ETF/Stock dashboard CLI (Yahoo Finance)"
+requires-python = ">=3.10"
+dependencies = [
+  "yfinance>=1.2.0",
+  "pandas>=2.0.0",
+  "numpy>=2.0.0",
+  "streamlit>=1.54.0",
+]
+
+[project.scripts]
+etf-dashboard = "etf_dashboard.cli:main"
+etf-dashboard-gui = "etf_dashboard.gui_streamlit:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

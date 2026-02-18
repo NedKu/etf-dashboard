@@ -1,0 +1,3 @@
+[console_scripts]
+etf-dashboard = etf_dashboard.cli:main
+etf-dashboard-gui = etf_dashboard.gui_streamlit:main
