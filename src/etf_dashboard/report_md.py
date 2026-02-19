@@ -191,41 +191,6 @@ def render_report_md(inp: ReportInputs) -> str:
 - = {fmt(inp.trailing_stop)}
 - 判斷：Close(P_now) {fmt(inp.p_now)} {'<=' if inp.trailing_stop_hit is True else '>' if inp.trailing_stop_hit is False else '?'} Trailing stop {fmt(inp.trailing_stop)}
 
-#### 2.4 老王（缺口 / 封閉 / 假跌破收復 / 島狀反轉 / 爆量防守 / 中軸 / 凶多吉少）
-
-**規則說明**
-- 缺口判定（嚴格缺口，不使用 gap_threshold）
-  - gap_up：Low[t] > High[t-1]
-  - gap_down：High[t] < Low[t-1]
-- 封閉判定（收盤價準則）
-  - gap_up 封閉：之後任一天 Close ≤ High[t-1]（= up_gap_bottom）
-  - gap_down 封閉：之後任一天 Close ≥ Low[t-1]（= down_gap_top）
-- 假跌破收復（買點）
-  - 條件：GAP_UP 已被「收盤價」封閉後，3 個交易日內 Close ≥ gap 上緣（= Low[gap_day]）
-- 島狀反轉（逃命）
-  - 高檔跳空向上後，短天期內再出現跳空向下（視窗由 island_min_days~island_max_days 控制）
-- 爆量防守/壓力
-  - massive_vol：成交量 = lookback_days 內最高量
-  - 防守價 massive_low = Low[爆量日]；壓力價 massive_high = High[爆量日]
-  - 跌破防守價（Close < massive_low）視為風險升級（Low_broken=True）
-  - 跌破壓力價（Close > massive_high）視為機會（High_broken=True）
-- 長紅中軸防守
-  - 長紅棒：最近一根紅K且實體/全長 ≥ 0.6
-  - 中軸 = (High + Low) / 2；跌破以 Close < 中軸
-- 凶多吉少（簡化偵測）
-  - 高檔長黑吞噬 / 出貨日 / 價漲量縮
-
-**本次偵測結果（含數值/日期）**
-- 最新缺口：{inp.gap_kind or 'MISSING'}（gap_date={inp.gap_last_date or 'MISSING'}；prev_date={inp.gap_prev_date or 'MISSING'}；gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]）
-- 收盤封閉缺口：{inp.gap_filled_by_close}（fill_date={inp.gap_fill_date_by_close or 'MISSING'}；fill_close={fmt(inp.gap_fill_close_by_close)}）
-- 假跌破收復(3日)：{inp.gap_reclaim_3d}（reclaim_date={inp.gap_reclaim_date or 'MISSING'}；reclaim_level={fmt(inp.gap_reclaim_level)}）
-- 島狀反轉：{inp.island_reversal}（gap_up_date={inp.island_gap_up_date or 'MISSING'}；gap_down_date={inp.island_gap_down_date or 'MISSING'}）
-- 爆量防守/壓力：
-  - massive_date={inp.vol_spike_date or 'MISSING'}
-  - massive_low={fmt(inp.vol_spike_defense)}（Low_broken={inp.vol_spike_defense_broken}）
-  - massive_high={fmt(inp.vol_spike_resistance)}（High_broken={inp.vol_spike_resistance_broken}）
-- 長紅中軸：midpoint={fmt(inp.midpoint_defense)}（broken={inp.midpoint_defense_broken}；midpoint_date={inp.midpoint_defense_date or 'MISSING'}）
-- 凶多吉少：engulf={inp.bearish_long_black_engulf}, dist_day={inp.bearish_distribution_day}, up_vol_down={inp.bearish_price_up_vol_down}
 
 #### 2.2 掃地僧風控運算（止損/目標/盈虧比）
 - 止損參數：stop_loss_pct = {fmt_pct(inp.stop_loss_pct * 100.0, 2)}
@@ -238,16 +203,30 @@ def render_report_md(inp: ReportInputs) -> str:
   - 分母：({fmt(inp.p_now)} - {fmt(inp.stop)})
   - R = {fmt(inp.r_ratio, 4)}
 
-#### 2.3 凱利公式（Kelly Criterion）逐步代入
+  
+#### 2.3 老王（缺口/爆量/三陽開泰）
+  **本次偵測結果（含數值/日期）**
+- 最新缺口：{inp.gap_kind or 'MISSING'}（gap_date={inp.gap_last_date or 'MISSING'}；prev_date={inp.gap_prev_date or 'MISSING'}；gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]）
+- 收盤封閉缺口：{inp.gap_filled_by_close}（fill_date={inp.gap_fill_date_by_close or 'MISSING'}；fill_close={fmt(inp.gap_fill_close_by_close)}）
+- 假跌破收復(3日)：{inp.gap_reclaim_3d}（reclaim_date={inp.gap_reclaim_date or 'MISSING'}；reclaim_level={fmt(inp.gap_reclaim_level)}）
+- 島狀反轉：{inp.island_reversal}（gap_up_date={inp.island_gap_up_date or 'MISSING'}；gap_down_date={inp.island_gap_down_date or 'MISSING'}）
+- 爆量防守/壓力：
+  - massive_date={inp.vol_spike_date or 'MISSING'}
+  - massive_low={fmt(inp.vol_spike_defense)}（Low_broken={inp.vol_spike_defense_broken}）
+  - massive_high={fmt(inp.vol_spike_resistance)}（High_broken={inp.vol_spike_resistance_broken}）
+- 凶多吉少：engulf={inp.bearish_long_black_engulf}, dist_day={inp.bearish_distribution_day}, up_vol_down={inp.bearish_price_up_vol_down}
+
+#### 2.4 凱利公式（Kelly Criterion）逐步代入
 - 勝率 W（規則推導）：W = {fmt(inp.kelly_w, 2)}
 - 凱利倉位：f = (W × (R+1) - 1) / R
   - f = ({fmt(inp.kelly_w, 4)} × ({fmt(inp.r_ratio, 4)} + 1) - 1) / {fmt(inp.r_ratio, 4)}
   - f_raw = {fmt(inp.kelly_f_raw, 4)}
   - f_capped（上限 20% 且不小於 0）= {fmt_pct((inp.kelly_f_capped * 100.0) if inp.kelly_f_capped is not None else None, 2)}
 
-### 3. 👨‍⚕️ 雙學派綜合診斷
-- 量價動能（哲哲）：量能判定 = {inp.vol_label}（倍數 {fmt(inp.vol_ratio, 2)}）
-- 趨勢紀律（掃地僧）：三陽開泰 = {inp.san_yang}；長線位階 = {inp.trend_regime}；大盤濾網 = {inp.bench_regime}
+### 3. 👨‍⚕️ 綜合診斷
+- 量價動能（哲哲）：量能判定 = {inp.vol_label}（倍數 {fmt(inp.vol_ratio, 2)}）;60 日乖離率 = {fmt(inp.bias60, 2)}%;MACD 動能柱 = {fmt(inp.macd_hist)}
+- 趨勢紀律（掃地僧）：長線位階 = {inp.trend_regime}；大盤濾網 = {inp.bench_regime}
+- 線型結構（老王）：缺口 = {inp.gap_kind or 'MISSING'}；島狀反轉 = {inp.island_reversal}；爆量 = {inp.vol_spike} ; 凶多吉少 = engulf={inp.bearish_long_black_engulf}；三陽開泰 = {inp.san_yang}
 
 ### 4. 🚀 最終操作指令 (Final Verdict)
 **評級：{inp.final_rating}**
