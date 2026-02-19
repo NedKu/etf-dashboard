@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
+from etf_dashboard.charting import prepare_chart_data
 from etf_dashboard.cli import build_report
+from etf_dashboard.data_yahoo import fetch_snapshot
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,50 @@ def main() -> None:
         benchmark = st.text_input("Benchmark", value="^GSPC")
         lookback = st.number_input("Lookback (days)", min_value=200, max_value=2000, value=400, step=50)
         vol_window = st.number_input("Volume avg window", min_value=5, max_value=120, value=20, step=5)
+
+        st.header("Chart")
+        chart_mode = st.radio(
+            "Date range mode",
+            options=["Last N days", "Custom"],
+            index=0,
+            horizontal=True,
+        )
+
+        snap_for_dates = None
+        if chart_mode == "Custom":
+            try:
+                snap_for_dates = fetch_snapshot(ticker.strip() or "VOO", lookback_days=int(lookback))
+            except Exception:
+                snap_for_dates = None
+
+        if chart_mode == "Custom" and snap_for_dates is not None and not snap_for_dates.history.empty:
+            df_idx = pd.to_datetime(snap_for_dates.history.index)
+            min_date = df_idx.min().date()
+            max_date = df_idx.max().date()
+            start_date, end_date = st.date_input(
+                "Chart date range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+        else:
+            chart_range = st.slider(
+                "Chart range (days)",
+                min_value=30,
+                max_value=int(lookback),
+                value=min(180, int(lookback)),
+                step=10,
+                help="只影響圖表顯示範圍（不影響報告 lookback 抓取）",
+            )
+            start_date = None
+            end_date = None
+
+        ma_windows = st.multiselect(
+            "Moving averages",
+            options=[5, 10, 20, 50, 60, 150, 200],
+            default=[5, 10, 20, 50, 200],
+        )
+
         stop_loss_pct = st.number_input("Stop-loss %", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
         trailing_stop_pct = st.number_input("Trailing stop % (from P_high)", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
         max_position_pct = st.number_input("Max position % (cap)", min_value=1.0, max_value=50.0, value=20.0, step=1.0)
@@ -66,6 +115,102 @@ def main() -> None:
         run = st.button("Generate")
 
     report_dir = Path(out_dir)
+
+    # Chart (interactive)
+    st.subheader("Chart")
+    try:
+        snap = fetch_snapshot(ticker.strip() or "VOO", lookback_days=int(lookback))
+        chart = prepare_chart_data(
+            snap.history,
+            ma_windows=[int(x) for x in ma_windows],
+            volume_avg_window=int(vol_window),
+        )
+
+        df = chart.df
+        if start_date is not None and end_date is not None:
+            # st.date_input can return a single date if user clears one side
+            if isinstance(start_date, date) and isinstance(end_date, date):
+                df_show = df.loc[(df.index.date >= start_date) & (df.index.date <= end_date)].copy()
+            else:
+                df_show = df.tail(int(min(180, len(df)))).copy()
+        else:
+            df_show = df.tail(int(chart_range)).copy()
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.02,
+            row_heights=[0.72, 0.28],
+        )
+
+        fig.add_trace(
+            go.Candlestick(
+                x=df_show.index,
+                open=df_show["Open"],
+                high=df_show["High"],
+                low=df_show["Low"],
+                close=df_show["Close"],
+                name="Daily",
+            ),
+            row=1,
+            col=1,
+        )
+
+        for w in [int(x) for x in ma_windows]:
+            col = f"MA{w}"
+            if col in df_show.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_show.index,
+                        y=df_show[col],
+                        mode="lines",
+                        name=col,
+                        line=dict(width=1.5),
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+        fig.add_trace(
+            go.Bar(
+                x=df_show.index,
+                y=df_show["Volume"],
+                name="Volume",
+                marker=dict(color="rgba(120,120,120,0.6)"),
+            ),
+            row=2,
+            col=1,
+        )
+
+        vavg_col = f"VAVG{int(vol_window)}"
+        if vavg_col in df_show.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df_show.index,
+                    y=df_show[vavg_col],
+                    mode="lines",
+                    name=vavg_col,
+                    line=dict(width=1.5, color="orange"),
+                ),
+                row=2,
+                col=1,
+            )
+
+        fig.update_layout(
+            height=720,
+            margin=dict(l=10, r=10, t=30, b=10),
+            hovermode="x unified",
+            xaxis_rangeslider_visible=False,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
+
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.warning("Chart unavailable (data fetch or plotting error).")
+        st.exception(e)
 
     if run:
         if not ticker.strip():
