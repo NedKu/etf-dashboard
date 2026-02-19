@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -46,7 +47,12 @@ def main() -> None:
     with st.sidebar:
         st.header("Generate report")
         ticker = st.text_input("Yahoo ticker", value="VOO", help="例：VOO、2330.TW")
-        out_dir = st.text_input("Reports directory", value="reports")
+
+        # When packaged (PyInstaller onefile), default to a user-writable directory.
+        # Launcher sets ETF_DASHBOARD_REPORT_DIR.
+        default_out_dir = os.environ.get("ETF_DASHBOARD_REPORT_DIR", "reports")
+        out_dir = st.text_input("Reports directory", value=default_out_dir)
+
         benchmark = st.text_input("Benchmark", value="^GSPC")
         lookback = st.number_input("Lookback (days)", min_value=200, max_value=2000, value=400, step=50)
         vol_window = st.number_input("Volume avg window", min_value=5, max_value=120, value=20, step=5)
