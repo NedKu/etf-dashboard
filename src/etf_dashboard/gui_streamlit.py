@@ -46,13 +46,21 @@ def main() -> None:
         lookback = st.number_input("Lookback (days)", min_value=200, max_value=2000, value=400, step=50)
         vol_window = st.number_input("Volume avg window", min_value=5, max_value=120, value=20, step=5)
         stop_loss_pct = st.number_input("Stop-loss %", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
+        trailing_stop_pct = st.number_input("Trailing stop % (from P_high)", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
+        max_position_pct = st.number_input("Max position % (cap)", min_value=1.0, max_value=50.0, value=20.0, step=1.0)
+        gap_threshold = st.number_input("Gap threshold %", min_value=0.1, max_value=5.0, value=0.3, step=0.1)
+        island_min_days = st.number_input("Island min days", min_value=1, max_value=10, value=2, step=1)
+        island_max_days = st.number_input("Island max days", min_value=2, max_value=30, value=10, step=1)
+        laowang_lookback = st.number_input("老王 lookback (days)", min_value=30, max_value=400, value=120, step=10)
+        vol_spike_mult = st.number_input("Volume spike mult", min_value=1.0, max_value=10.0, value=2.0, step=0.25)
+        vol_spike_window = st.number_input("Volume spike window (days)", min_value=20, max_value=260, value=20, step=10)
         min_rr = st.number_input(
             "Min R/R (target÷risk)",
-            min_value=0.5,
+            min_value=0.0,
             max_value=10.0,
             value=2.5,
             step=0.25,
-            help="作為判斷條件：只顯示/標示盈虧比 >= 此值的交易計畫 (R = (target-entry)/(entry-stop))",
+            help="作為判斷條件：只顯示/標示盈虧比 >= 此值的交易計畫 (R = (target-entry)/(entry-stop))；0 表示不限制",
         )
 
         run = st.button("Generate")
@@ -73,6 +81,14 @@ def main() -> None:
                         volume_avg_window=int(vol_window),
                         stop_loss_pct=float(stop_loss_pct) / 100.0,
                         min_rr=float(min_rr),
+                        max_position_pct=float(max_position_pct) / 100.0,
+                        trailing_stop_pct=float(trailing_stop_pct) / 100.0,
+                        gap_threshold=float(gap_threshold) / 100.0,
+                        island_min_days=int(island_min_days),
+                        island_max_days=int(island_max_days),
+                        laowang_lookback_days=int(laowang_lookback),
+                        vol_spike_mult=float(vol_spike_mult),
+                        vol_spike_window=int(vol_spike_window),
                     )
                     st.success(f"Report generated: {out_path}")
                 except Exception as e:

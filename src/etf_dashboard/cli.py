@@ -13,6 +13,7 @@ from .data_yahoo import (
     yahoo_quote_url,
 )
 from .indicators import latest_value, macd, pct, rsi, sma
+from .laowang import detect_island_reversal, detect_last_gap, volume_spike_defense_price
 from .report_md import ReportInputs, render_report_md
 from .rules import choose_win_rate, san_yang_kai_tai, trend_regime, volume_signal
 
@@ -28,6 +29,8 @@ class Derived:
     ma50: float | None
     ma60: float | None
     ma150: float | None
+    ma200: float | None
+    bias60: float | None
     ma20_slope: float | None
     v_today: float | None
     v_avg: float | None
@@ -36,8 +39,34 @@ class Derived:
     macd_signal: float | None
     macd_hist: float | None
 
+    # Risk controls / patterns
+    trailing_stop: float | None
+    trailing_stop_hit: bool | None
 
-def _compute_from_history(hist: pd.DataFrame, volume_avg_window: int = 20) -> Derived:
+    # 老王 signals
+    gap_kind: str | None
+    gap_open: bool | None
+    gap_filled: bool | None
+    gap_lower: float | None
+    gap_upper: float | None
+    island_reversal: bool | None
+    vol_spike: bool | None
+    vol_spike_defense: float | None
+    vol_spike_defense_broken: bool | None
+
+
+def _compute_from_history(
+    hist: pd.DataFrame,
+    volume_avg_window: int = 20,
+    *,
+    trailing_stop_pct: float = 0.05,
+    gap_threshold: float = 0.003,
+    island_min_days: int = 2,
+    island_max_days: int = 10,
+    laowang_lookback_days: int = 120,
+    vol_spike_mult: float = 2.0,
+    vol_spike_window: int = 20,
+) -> Derived:
     close = hist["Close"].astype(float)
     open_ = hist["Open"].astype(float)
 
@@ -47,6 +76,9 @@ def _compute_from_history(hist: pd.DataFrame, volume_avg_window: int = 20) -> De
     ma50_s = sma(close, 50)
     ma60_s = sma(close, 60)
     ma150_s = sma(close, 150)
+    ma200_s = sma(close, 200)
+
+    bias60_s = (close - ma60_s) / ma60_s * 100.0
 
     # MA20 slope: today - 5 days ago
     ma20_slope = None
@@ -60,8 +92,53 @@ def _compute_from_history(hist: pd.DataFrame, volume_avg_window: int = 20) -> De
     rsi_s = rsi(close, 14)
     macd_df = macd(close, 12, 26, 9)
 
+    p_now = latest_value(close)
+
+    # Trailing stop based on P_high (proxy: 252d High in history "High")
+    p_high_hist = None
+    if "High" in hist.columns and not hist["High"].dropna().empty:
+        last = hist["High"].astype(float).tail(252)
+        if not last.dropna().empty:
+            p_high_hist = float(last.max())
+
+    trailing_stop = None
+    trailing_stop_hit = None
+    if p_high_hist is not None:
+        trailing_stop = float(p_high_hist) * (1.0 - float(trailing_stop_pct))
+        if p_now is not None:
+            trailing_stop_hit = float(p_now) < trailing_stop
+
+    # 老王 signals
+    gap = detect_last_gap(hist, gap_threshold=float(gap_threshold), lookback_days=int(laowang_lookback_days))
+    gap_kind = gap.last_gap.kind if gap.last_gap is not None else None
+    gap_open = None
+    gap_filled = None
+    gap_lower = None
+    gap_upper = None
+    if gap.last_gap is not None and gap.is_filled is not None:
+        gap_open = not bool(gap.is_filled)
+        gap_filled = bool(gap.is_filled)
+        gap_lower = float(gap.last_gap.lower)
+        gap_upper = float(gap.last_gap.upper)
+
+    island = detect_island_reversal(
+        hist,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+    island_reversal = island is not None
+
+    spike = volume_spike_defense_price(hist, vol_avg_window=int(vol_spike_window), spike_mult=float(vol_spike_mult))
+    vol_spike = spike.is_spike
+    vol_spike_defense = spike.defense_price
+    vol_spike_defense_broken = None
+    if p_now is not None and vol_spike_defense is not None:
+        vol_spike_defense_broken = float(p_now) < float(vol_spike_defense)
+
     return Derived(
-        p_now=latest_value(close),
+        p_now=p_now,
         open_=latest_value(open_),
         close=latest_value(close),
         ma5=latest_value(ma5_s),
@@ -70,6 +147,8 @@ def _compute_from_history(hist: pd.DataFrame, volume_avg_window: int = 20) -> De
         ma50=latest_value(ma50_s),
         ma60=latest_value(ma60_s),
         ma150=latest_value(ma150_s),
+        ma200=latest_value(ma200_s),
+        bias60=latest_value(bias60_s),
         ma20_slope=ma20_slope,
         v_today=latest_value(v),
         v_avg=latest_value(v_avg_s),
@@ -77,6 +156,17 @@ def _compute_from_history(hist: pd.DataFrame, volume_avg_window: int = 20) -> De
         macd=latest_value(macd_df["macd"]),
         macd_signal=latest_value(macd_df["signal"]),
         macd_hist=latest_value(macd_df["hist"]),
+        trailing_stop=trailing_stop,
+        trailing_stop_hit=trailing_stop_hit,
+        gap_kind=gap_kind,
+        gap_open=gap_open,
+        gap_filled=gap_filled,
+        gap_lower=gap_lower,
+        gap_upper=gap_upper,
+        island_reversal=island_reversal,
+        vol_spike=vol_spike,
+        vol_spike_defense=vol_spike_defense,
+        vol_spike_defense_broken=vol_spike_defense_broken,
     )
 
 
@@ -213,23 +303,50 @@ def build_report(
     volume_avg_window: int,
     stop_loss_pct: float = 0.05,
     min_rr: float = 0.0,
+    max_position_pct: float = 0.20,
+    *,
+    trailing_stop_pct: float = 0.05,
+    gap_threshold: float = 0.003,
+    island_min_days: int = 2,
+    island_max_days: int = 10,
+    laowang_lookback_days: int = 120,
+    vol_spike_mult: float = 2.0,
+    vol_spike_window: int = 20,
 ) -> Path:
     if not (0.0 < stop_loss_pct < 0.5):
         raise ValueError("stop_loss_pct must be between 0 and 0.5 (e.g., 0.05 for 5%)")
+    if not (0.0 < trailing_stop_pct < 0.5):
+        raise ValueError("trailing_stop_pct must be between 0 and 0.5 (e.g., 0.05 for 5%)")
     if min_rr < 0:
         raise ValueError("min_rr must be >= 0")
+    if not (0.0 < max_position_pct <= 1.0):
+        raise ValueError("max_position_pct must be in (0, 1]")
 
     snap = fetch_snapshot(ticker, lookback_days=lookback_days)
     bench = fetch_snapshot(benchmark, lookback_days=lookback_days)
 
-    d = _compute_from_history(snap.history, volume_avg_window=volume_avg_window)
-    b = _compute_from_history(bench.history, volume_avg_window=volume_avg_window)
+    d = _compute_from_history(
+        snap.history,
+        volume_avg_window=volume_avg_window,
+        trailing_stop_pct=trailing_stop_pct,
+        gap_threshold=gap_threshold,
+        island_min_days=island_min_days,
+        island_max_days=island_max_days,
+        laowang_lookback_days=laowang_lookback_days,
+        vol_spike_mult=vol_spike_mult,
+        vol_spike_window=vol_spike_window,
+    )
+    b = _compute_from_history(bench.history, volume_avg_window=volume_avg_window, trailing_stop_pct=trailing_stop_pct)
 
     p_high, p_high_src = _p_high_from_info_or_history(snap.info, snap.history)
 
     notes: list[str] = [
         f"P_now/MA/RSI/MACD/均量皆以 Yahoo 日線 history 計算（Close/Volume）。",
         f"P_high 來源：{p_high_src}",
+        "BIAS_60 = ((P_now - MA60) / MA60) * 100%",
+        f"Trailing stop = P_high × (1 - trailing_stop_pct)；本次 trailing_stop_pct={trailing_stop_pct}",
+        "老王：gap 門檻 gap_threshold（預設 0.003=0.3%）、島狀反轉視窗 2~10 天、爆量倍數預設 2.0×Vavg20。",
+        "Kelly 最終倉位受 max_position_pct 上限約束（預設 20%）。",
     ]
 
     drawdown_pct = None
@@ -278,20 +395,34 @@ def build_report(
             "target = entry + MinR*(entry-stop)。"
         )
 
-    w = choose_win_rate(d.p_now, d.ma150, vol.vol_ratio, d.ma20_slope, sy)
+    w = choose_win_rate(
+        d.p_now,
+        d.ma150,
+        vol.vol_ratio,
+        d.ma20_slope,
+        sy,
+        bias60=d.bias60,
+        gap_open=d.gap_open,
+        gap_filled=d.gap_filled,
+        island_reversal=d.island_reversal,
+        vol_spike_defense_broken=d.vol_spike_defense_broken,
+    )
     kelly_f_raw = None
     kelly_f_capped = None
     if None not in (w, d.p_now, stop, target, r_val) and w is not None and stop is not None and target is not None:
         # Kelly f
         f = (w * (r_val + 1.0) - 1.0) / r_val
         kelly_f_raw = float(f)
-        kelly_f_capped = max(0.0, min(0.25, float(f)))
+        kelly_f_capped = max(0.0, min(float(max_position_pct), float(f)))
 
     # evidence completeness gate
     required = [
         d.p_now,
         d.ma20,
+        d.ma60,
         d.ma150,
+        d.ma200,
+        d.bias60,
         p_high,
         d.v_today,
         d.v_avg,
@@ -302,6 +433,13 @@ def build_report(
         stop,
         target,
         r_val,
+        kelly_f_capped,
+        d.trailing_stop,
+        d.trailing_stop_hit,
+        d.gap_open,
+        d.gap_filled,
+        d.island_reversal,
+        d.vol_spike_defense_broken,
     ]
     evidence_ok = all(x is not None for x in required)
     if not evidence_ok:
@@ -331,8 +469,22 @@ def build_report(
         ma50=d.ma50,
         ma60=d.ma60,
         ma150=d.ma150,
+        ma200=d.ma200,
+        bias60=d.bias60,
         p_high=p_high,
         drawdown_pct=drawdown_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        trailing_stop=d.trailing_stop,
+        trailing_stop_hit=d.trailing_stop_hit,
+        gap_kind=d.gap_kind,
+        gap_open=d.gap_open,
+        gap_filled=d.gap_filled,
+        gap_lower=d.gap_lower,
+        gap_upper=d.gap_upper,
+        island_reversal=d.island_reversal,
+        vol_spike=d.vol_spike,
+        vol_spike_defense=d.vol_spike_defense,
+        vol_spike_defense_broken=d.vol_spike_defense_broken,
         v_today=d.v_today,
         v_avg=d.v_avg,
         vol_ratio=vol.vol_ratio,
@@ -389,6 +541,60 @@ def main(argv: list[str] | None = None) -> int:
         default=5.0,
         help="Stop-loss percent (e.g. 5 for 5%%). Used as entry*(1 - pct/100), then tightened by MA20.",
     )
+    p.add_argument(
+        "--min-rr",
+        type=float,
+        default=0.0,
+        help="Minimum reward/risk (R) required to output a rating. 0 disables this gate.",
+    )
+    p.add_argument(
+        "--max-position-pct",
+        type=float,
+        default=20.0,
+        help="Max position percent cap for Kelly output (default: 20).",
+    )
+    p.add_argument(
+        "--trailing-stop-pct",
+        type=float,
+        default=5.0,
+        help="Trailing stop percent based on P_high (e.g. 5 for 5%%).",
+    )
+    p.add_argument(
+        "--gap-threshold",
+        type=float,
+        default=0.3,
+        help="Gap threshold percent for 老王 rules (default: 0.3 for 0.3%%).",
+    )
+    p.add_argument(
+        "--island-min-days",
+        type=int,
+        default=2,
+        help="Island reversal min separation days (default: 2).",
+    )
+    p.add_argument(
+        "--island-max-days",
+        type=int,
+        default=10,
+        help="Island reversal max separation days (default: 10).",
+    )
+    p.add_argument(
+        "--laowang-lookback",
+        type=int,
+        default=120,
+        help="Lookback days for 老王 gap/island detection (default: 120).",
+    )
+    p.add_argument(
+        "--vol-spike-mult",
+        type=float,
+        default=2.0,
+        help="Volume spike multiplier for defense price (default: 2.0).",
+    )
+    p.add_argument(
+        "--vol-spike-window",
+        type=int,
+        default=20,
+        help="Volume average window for spike baseline (default: 20).",
+    )
 
     args = p.parse_args(argv)
 
@@ -399,6 +605,15 @@ def main(argv: list[str] | None = None) -> int:
         lookback_days=args.lookback,
         volume_avg_window=args.volume_avg_window,
         stop_loss_pct=float(args.stop_loss_pct) / 100.0,
+        min_rr=float(args.min_rr),
+        max_position_pct=float(args.max_position_pct) / 100.0,
+        trailing_stop_pct=float(args.trailing_stop_pct) / 100.0,
+        gap_threshold=float(args.gap_threshold) / 100.0,
+        island_min_days=int(args.island_min_days),
+        island_max_days=int(args.island_max_days),
+        laowang_lookback_days=int(args.laowang_lookback),
+        vol_spike_mult=float(args.vol_spike_mult),
+        vol_spike_window=int(args.vol_spike_window),
     )
 
     print(str(out))

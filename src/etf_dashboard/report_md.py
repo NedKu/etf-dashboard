@@ -43,8 +43,26 @@ class ReportInputs:
     ma50: float | None
     ma60: float | None
     ma150: float | None
+    ma200: float | None
+    bias60: float | None
     p_high: float | None
     drawdown_pct: float | None
+
+    # Risk controls
+    trailing_stop_pct: float
+    trailing_stop: float | None
+    trailing_stop_hit: bool | None
+
+    # 老王 evidence
+    gap_kind: str | None
+    gap_open: bool | None
+    gap_filled: bool | None
+    gap_lower: float | None
+    gap_upper: float | None
+    island_reversal: bool | None
+    vol_spike: bool | None
+    vol_spike_defense: float | None
+    vol_spike_defense_broken: bool | None
 
     v_today: float | None
     v_avg: float | None
@@ -111,10 +129,12 @@ def render_report_md(inp: ReportInputs) -> str:
 
 | 數據項目 | 系統抓取數值 | 狀態/計算結果 |
 | :--- | :--- | :--- |
-| **最新股價 (P_now)** | {fmt(inp.p_now)} | - |
+| **最新股價 (P_now)** | {fmt(inp.p_now)} | 60日乖離率 BIAS_60 = ((P_now - MA60) / MA60) × 100% = {fmt(inp.bias60, 2)}% |
+| **移動停利 (Trailing stop)** | P_high×(1-{fmt_ratio(inp.trailing_stop_pct, 4)}) = {fmt(inp.trailing_stop)} | {'⚠️ 已跌破（建議出清/不開新倉）' if inp.trailing_stop_hit is True else ('守住' if inp.trailing_stop_hit is False else 'MISSING')} |
+| **老王：缺口/島狀/爆量防守** | gap={inp.gap_kind or 'MISSING'}, open={inp.gap_open}, filled={inp.gap_filled} | island_reversal={inp.island_reversal}, defense={fmt(inp.vol_spike_defense)} (broken={inp.vol_spike_defense_broken}) |
 | **短期均線** | MA5={fmt(inp.ma5)}, MA10={fmt(inp.ma10)} | - |
 | **中期均線** | MA20={fmt(inp.ma20)}, MA50={fmt(inp.ma50)} | 生命線守護（MA20）：{'守住' if (inp.p_now is not None and inp.ma20 is not None and inp.p_now >= inp.ma20) else ('跌破' if (inp.p_now is not None and inp.ma20 is not None) else 'MISSING')} |
-| **中長期均線** | MA60={fmt(inp.ma60)}, MA150={fmt(inp.ma150)} | 趨勢位階：{inp.trend_regime} |
+| **長期均線** | MA60={fmt(inp.ma60)}, MA150={fmt(inp.ma150)}, MA200={fmt(inp.ma200)} | 趨勢位階：{inp.trend_regime} |
 | **波段最高價 (P_high)** | {fmt(inp.p_high)} | 目前回檔幅度：{fmt_pct(inp.drawdown_pct)} |
 | **成交量能 (V)** | 今日={fmt_int(inp.v_today)} / 均量={fmt_int(inp.v_avg)} | 量能倍數：{fmt(inp.vol_ratio, 2)} 倍（{inp.vol_label}） |
 | **技術指標** | RSI14={fmt(inp.rsi14)}, MACD={fmt(inp.macd)} | 動能：signal={fmt(inp.macd_signal)}, hist={fmt(inp.macd_hist)} |
@@ -127,6 +147,31 @@ def render_report_md(inp: ReportInputs) -> str:
 - 觀察買點 (0.7)：P_high × 0.7 = {fmt(inp.p_high)} × 0.7 = {fmt(inp.rule_35_watch)}
 - 黃金抄底 (0.65)：P_high × 0.65 = {fmt(inp.p_high)} × 0.65 = {fmt(inp.rule_35_gold)}
 - 判定：目前股價位於 **{inp.rule_35_zone}**
+
+#### 2.1.1 60 日乖離率（BIAS_60）逐步代入
+- BIAS_60 = ((P_now - MA60) / MA60) × 100%
+- = (({fmt(inp.p_now)} - {fmt(inp.ma60)}) / {fmt(inp.ma60)}) × 100%
+- = {fmt(inp.bias60, 2)}%
+
+#### 2.1.2 5% 移動停利（Trailing stop）逐步代入
+- Trailing stop = P_high × (1 - trailing_stop_pct)
+- = {fmt(inp.p_high)} × (1 - {fmt_ratio(inp.trailing_stop_pct, 4)})
+- = {fmt(inp.trailing_stop)}
+- 判斷：Close(P_now) {fmt(inp.p_now)} {'<=' if inp.trailing_stop_hit is True else '>' if inp.trailing_stop_hit is False else '?'} Trailing stop {fmt(inp.trailing_stop)}
+
+#### 2.1.3 老王：缺口 / 封閉 / 島狀反轉 / 爆量K棒防守價（簡化版）
+- 缺口判定：
+  - gap_up：Low[t] > High[t-1] × (1 + 0.003)
+  - gap_down：High[t] < Low[t-1] × (1 - 0.003)
+- 封閉判定：
+  - gap_up 封閉：之後任一天 Low <= High[t-1]
+  - gap_down 封閉：之後任一天 High >= Low[t-1]
+- 島狀反轉：先 gap_up，之後 2~10 天內出現 gap_down，且 gap_down 的缺口區間與 gap_up 區間有重疊/回補
+- 爆量K棒防守價：Volume >= 2.0×Vavg20 且紅K，防守價=Low；跌破防守價視為風險升級
+- 本次偵測結果：
+  - 最新缺口：{inp.gap_kind or 'MISSING'}，open={inp.gap_open}，filled={inp.gap_filled}，gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]
+  - 島狀反轉：{inp.island_reversal}
+  - 爆量防守價：{fmt(inp.vol_spike_defense)}（broken={inp.vol_spike_defense_broken}）
 
 #### 2.2 掃地僧風控運算（止損/目標/盈虧比）
 - 止損參數：stop_loss_pct = {fmt_pct(inp.stop_loss_pct * 100.0, 2)}
@@ -144,7 +189,7 @@ def render_report_md(inp: ReportInputs) -> str:
 - 凱利倉位：f = (W × (R+1) - 1) / R
   - f = ({fmt(inp.kelly_w, 4)} × ({fmt(inp.r_ratio, 4)} + 1) - 1) / {fmt(inp.r_ratio, 4)}
   - f_raw = {fmt(inp.kelly_f_raw, 4)}
-  - f_capped（上限 25% 且不小於 0）= {fmt(inp.kelly_f_capped, 4)}
+  - f_capped（上限 20% 且不小於 0）= {fmt_pct((inp.kelly_f_capped * 100.0) if inp.kelly_f_capped is not None else None, 2)}
 
 ### 3. 👨‍⚕️ 雙學派綜合診斷
 - 量價動能（哲哲）：量能判定 = {inp.vol_label}（倍數 {fmt(inp.vol_ratio, 2)}）
@@ -155,9 +200,15 @@ def render_report_md(inp: ReportInputs) -> str:
 
 - 建議進場價：{fmt(inp.p_now)}
 - 建議止損價：{fmt(inp.stop)}（觸價強制執行）
+- 5% 移動停利價：{fmt(inp.trailing_stop)}（若 Close 跌破則出清）
 - **勝率 (W)：** {fmt_pct((inp.kelly_w * 100.0) if inp.kelly_w is not None else None, 2)}
 - **盈虧比 (R)：** {fmt(inp.r_ratio, 4)}
-- **資金控管 (Kelly)：** 根據勝率 {fmt_pct((inp.kelly_w * 100.0) if inp.kelly_w is not None else None, 2)} 與盈虧比 {fmt(inp.r_ratio, 4)}，建議投入資金比例為 **{fmt_pct((min(0.20, inp.kelly_f_capped) * 100.0) if inp.kelly_f_capped is not None else None, 2)}**（若為負值或為 MISSING 則不建議進場；單一標的不超過 20%）
+- **資金控管 (Kelly)：** 根據勝率 {fmt_pct((inp.kelly_w * 100.0) if inp.kelly_w is not None else None, 2)} 與盈虧比 {fmt(inp.r_ratio, 4)}，建議投入資金比例為 **{fmt_pct((inp.kelly_f_capped * 100.0) if inp.kelly_f_capped is not None else None, 2)}**（若為負值或為 MISSING 則不建議進場；單一標的不超過 20%）
+
+- 老王風險旗標：
+  - 島狀反轉：{inp.island_reversal}
+  - 缺口：{inp.gap_kind or 'MISSING'}（open={inp.gap_open}, filled={inp.gap_filled}）
+  - 爆量防守價：{fmt(inp.vol_spike_defense)}（跌破={inp.vol_spike_defense_broken}）
 
 ### 5. 🧾 透明化備註（防幻覺）
 {notes}
