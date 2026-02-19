@@ -59,10 +59,41 @@ class ReportInputs:
     gap_filled: bool | None
     gap_lower: float | None
     gap_upper: float | None
+
+    # 缺口事件日期（用於報告呈現）
+    gap_last_date: str | None
+    gap_prev_date: str | None
+
+    # 收盤價準則：封閉缺口
+    gap_filled_by_close: bool | None
+    gap_fill_date_by_close: str | None
+    gap_fill_close_by_close: float | None
+
+    # 假跌破收復
+    gap_reclaim_3d: bool | None
+    gap_reclaim_date: str | None
+    gap_reclaim_level: float | None
+
     island_reversal: bool | None
+    island_gap_up_date: str | None
+    island_gap_down_date: str | None
+
+    # 爆量（規格）：lookback_days 內最高量（massive_vol），同時提供防守/壓力與突破狀態
     vol_spike: bool | None
-    vol_spike_defense: float | None
-    vol_spike_defense_broken: bool | None
+    vol_spike_date: str | None
+    vol_spike_defense: float | None  # massive_low
+    vol_spike_resistance: float | None  # massive_high
+    vol_spike_defense_broken: bool | None  # Low_broken
+    vol_spike_resistance_broken: bool | None  # High_broken
+
+    # 長紅中軸防守
+    midpoint_defense: float | None
+    midpoint_defense_broken: bool | None
+    midpoint_defense_date: str | None
+
+    bearish_long_black_engulf: bool | None
+    bearish_price_up_vol_down: bool | None
+    bearish_distribution_day: bool | None
 
     v_today: float | None
     v_avg: float | None
@@ -131,7 +162,8 @@ def render_report_md(inp: ReportInputs) -> str:
 | :--- | :--- | :--- |
 | **最新股價 (P_now)** | {fmt(inp.p_now)} | 60日乖離率 BIAS_60 = ((P_now - MA60) / MA60) × 100% = {fmt(inp.bias60, 2)}% |
 | **移動停利 (Trailing stop)** | P_high×(1-{fmt_ratio(inp.trailing_stop_pct, 4)}) = {fmt(inp.trailing_stop)} | {'⚠️ 已跌破（建議出清/不開新倉）' if inp.trailing_stop_hit is True else ('守住' if inp.trailing_stop_hit is False else 'MISSING')} |
-| **老王：缺口/島狀/爆量防守** | gap={inp.gap_kind or 'MISSING'}, open={inp.gap_open}, filled={inp.gap_filled} | island_reversal={inp.island_reversal}, defense={fmt(inp.vol_spike_defense)} (broken={inp.vol_spike_defense_broken}) |
+| **老王：缺口(收盤)/收復/島狀/防守** | gap={inp.gap_kind or 'MISSING'}, zone=[{fmt(inp.gap_lower)},{fmt(inp.gap_upper)}] | filled_by_close={inp.gap_filled_by_close} ({inp.gap_fill_date_by_close or 'MISSING'}), reclaim_3d={inp.gap_reclaim_3d} ({inp.gap_reclaim_date or 'MISSING'}) |
+| **老王：爆量/中軸/凶多吉少** | massive_low={fmt(inp.vol_spike_defense)} (Low_broken={inp.vol_spike_defense_broken}), massive_high={fmt(inp.vol_spike_resistance)} (High_broken={inp.vol_spike_resistance_broken}) | midpoint={fmt(inp.midpoint_defense)} (broken={inp.midpoint_defense_broken}, date={inp.midpoint_defense_date or 'MISSING'}) |
 | **短期均線** | MA5={fmt(inp.ma5)}, MA10={fmt(inp.ma10)} | - |
 | **中期均線** | MA20={fmt(inp.ma20)}, MA50={fmt(inp.ma50)} | 生命線守護（MA20）：{'守住' if (inp.p_now is not None and inp.ma20 is not None and inp.p_now >= inp.ma20) else ('跌破' if (inp.p_now is not None and inp.ma20 is not None) else 'MISSING')} |
 | **長期均線** | MA60={fmt(inp.ma60)}, MA150={fmt(inp.ma150)}, MA200={fmt(inp.ma200)} | 趨勢位階：{inp.trend_regime} |
@@ -159,19 +191,41 @@ def render_report_md(inp: ReportInputs) -> str:
 - = {fmt(inp.trailing_stop)}
 - 判斷：Close(P_now) {fmt(inp.p_now)} {'<=' if inp.trailing_stop_hit is True else '>' if inp.trailing_stop_hit is False else '?'} Trailing stop {fmt(inp.trailing_stop)}
 
-#### 2.1.3 老王：缺口 / 封閉 / 島狀反轉 / 爆量K棒防守價（簡化版）
-- 缺口判定：
-  - gap_up：Low[t] > High[t-1] × (1 + 0.003)
-  - gap_down：High[t] < Low[t-1] × (1 - 0.003)
-- 封閉判定：
-  - gap_up 封閉：之後任一天 Low <= High[t-1]
-  - gap_down 封閉：之後任一天 High >= Low[t-1]
-- 島狀反轉：先 gap_up，之後 2~10 天內出現 gap_down，且 gap_down 的缺口區間與 gap_up 區間有重疊/回補
-- 爆量K棒防守價：Volume >= 2.0×Vavg20 且紅K，防守價=Low；跌破防守價視為風險升級
-- 本次偵測結果：
-  - 最新缺口：{inp.gap_kind or 'MISSING'}，open={inp.gap_open}，filled={inp.gap_filled}，gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]
-  - 島狀反轉：{inp.island_reversal}
-  - 爆量防守價：{fmt(inp.vol_spike_defense)}（broken={inp.vol_spike_defense_broken}）
+#### 2.4 老王（缺口 / 封閉 / 假跌破收復 / 島狀反轉 / 爆量防守 / 中軸 / 凶多吉少）
+
+**規則說明**
+- 缺口判定（嚴格缺口，不使用 gap_threshold）
+  - gap_up：Low[t] > High[t-1]
+  - gap_down：High[t] < Low[t-1]
+- 封閉判定（收盤價準則）
+  - gap_up 封閉：之後任一天 Close ≤ High[t-1]（= up_gap_bottom）
+  - gap_down 封閉：之後任一天 Close ≥ Low[t-1]（= down_gap_top）
+- 假跌破收復（買點）
+  - 條件：GAP_UP 已被「收盤價」封閉後，3 個交易日內 Close ≥ gap 上緣（= Low[gap_day]）
+- 島狀反轉（逃命）
+  - 高檔跳空向上後，短天期內再出現跳空向下（視窗由 island_min_days~island_max_days 控制）
+- 爆量防守/壓力
+  - massive_vol：成交量 = lookback_days 內最高量
+  - 防守價 massive_low = Low[爆量日]；壓力價 massive_high = High[爆量日]
+  - 跌破防守價（Close < massive_low）視為風險升級（Low_broken=True）
+  - 跌破壓力價（Close > massive_high）視為機會（High_broken=True）
+- 長紅中軸防守
+  - 長紅棒：最近一根紅K且實體/全長 ≥ 0.6
+  - 中軸 = (High + Low) / 2；跌破以 Close < 中軸
+- 凶多吉少（簡化偵測）
+  - 高檔長黑吞噬 / 出貨日 / 價漲量縮
+
+**本次偵測結果（含數值/日期）**
+- 最新缺口：{inp.gap_kind or 'MISSING'}（gap_date={inp.gap_last_date or 'MISSING'}；prev_date={inp.gap_prev_date or 'MISSING'}；gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]）
+- 收盤封閉缺口：{inp.gap_filled_by_close}（fill_date={inp.gap_fill_date_by_close or 'MISSING'}；fill_close={fmt(inp.gap_fill_close_by_close)}）
+- 假跌破收復(3日)：{inp.gap_reclaim_3d}（reclaim_date={inp.gap_reclaim_date or 'MISSING'}；reclaim_level={fmt(inp.gap_reclaim_level)}）
+- 島狀反轉：{inp.island_reversal}（gap_up_date={inp.island_gap_up_date or 'MISSING'}；gap_down_date={inp.island_gap_down_date or 'MISSING'}）
+- 爆量防守/壓力：
+  - massive_date={inp.vol_spike_date or 'MISSING'}
+  - massive_low={fmt(inp.vol_spike_defense)}（Low_broken={inp.vol_spike_defense_broken}）
+  - massive_high={fmt(inp.vol_spike_resistance)}（High_broken={inp.vol_spike_resistance_broken}）
+- 長紅中軸：midpoint={fmt(inp.midpoint_defense)}（broken={inp.midpoint_defense_broken}；midpoint_date={inp.midpoint_defense_date or 'MISSING'}）
+- 凶多吉少：engulf={inp.bearish_long_black_engulf}, dist_day={inp.bearish_distribution_day}, up_vol_down={inp.bearish_price_up_vol_down}
 
 #### 2.2 掃地僧風控運算（止損/目標/盈虧比）
 - 止損參數：stop_loss_pct = {fmt_pct(inp.stop_loss_pct * 100.0, 2)}
@@ -208,7 +262,8 @@ def render_report_md(inp: ReportInputs) -> str:
 - 老王風險旗標：
   - 島狀反轉：{inp.island_reversal}
   - 缺口：{inp.gap_kind or 'MISSING'}（open={inp.gap_open}, filled={inp.gap_filled}）
-  - 爆量防守價：{fmt(inp.vol_spike_defense)}（跌破={inp.vol_spike_defense_broken}）
+  - 爆量防守/壓力：low={fmt(inp.vol_spike_defense)}（Low_broken={inp.vol_spike_defense_broken}）, high={fmt(inp.vol_spike_resistance)}（High_broken={inp.vol_spike_resistance_broken}）
+  - 長紅中軸：midpoint={fmt(inp.midpoint_defense)}（broken={inp.midpoint_defense_broken}）
 
 ### 5. 🧾 透明化備註（防幻覺）
 {notes}

@@ -24,17 +24,22 @@ def test_choose_win_rate_risk_off_island() -> None:
 
 
 def test_choose_win_rate_bull_resonance_080() -> None:
+    # 0.80 requires: bull + 三陽 + vol_ratio>1.5 + bias60<10 + no hard risk flags
     w = choose_win_rate(
         p_now=101,
         ma150=100,
-        vol_ratio=1.2,
+        vol_ratio=1.6,
         ma20_slope=1.0,
         san_yang=True,
         bias60=1.0,
         gap_open=False,
         gap_filled=True,
+        gap_filled_by_close=False,
         island_reversal=False,
         vol_spike_defense_broken=False,
+        bearish_long_black_engulf=False,
+        bearish_distribution_day=False,
+        bearish_price_up_vol_down=False,
     )
     assert w == 0.80
 
@@ -53,14 +58,22 @@ def test_choose_win_rate_bull_060() -> None:
 
 
 def test_choose_win_rate_default_040() -> None:
+    # default 0.40 when not bull and no hard risk flags.
     w = choose_win_rate(
-        p_now=100.5,
+        p_now=99.5,
         ma150=100,
         vol_ratio=1.1,
         ma20_slope=0.1,
         san_yang=False,
         bias60=-1.0,
         island_reversal=False,
+        gap_open=False,
+        gap_filled=True,
+        gap_filled_by_close=False,
+        vol_spike_defense_broken=False,
+        bearish_long_black_engulf=False,
+        bearish_distribution_day=False,
+        bearish_price_up_vol_down=False,
     )
     assert w == 0.40
 

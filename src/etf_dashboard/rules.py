@@ -57,27 +57,33 @@ def choose_win_rate(
     bias60: float | None = None,
     gap_open: bool | None = None,
     gap_filled: bool | None = None,
+    gap_filled_by_close: bool | None = None,
     island_reversal: bool | None = None,
     vol_spike_defense_broken: bool | None = None,
+    bearish_long_black_engulf: bool | None = None,
+    bearish_distribution_day: bool | None = None,
+    bearish_price_up_vol_down: bool | None = None,
 ) -> float | None:
     """Step-ladder win-rate W (0.8/0.6/0.4/0.2) used in Kelly.
 
     Evidence-first:
     - If the core trend/volume fields are missing, return None.
 
-    Ladder (simplified, tunable):
-    - 0.80: multi-signal bullish resonance
-      (BULL trend + 三陽開泰 + vol_ratio>=1.0 + bias60>=0 + NO island reversal + (gap not open))
-    - 0.60: bullish
-      (BULL trend + (三陽開泰 or vol_ratio>=1.5) + NO island reversal)
-    - 0.40: mixed / neutral
-      (default when not strong bull, but not hard bear)
-    - 0.20: bearish / risk-off
-      (island reversal OR open gap-down OR defense broken OR (BEAR trend and ma20_slope<0))
+    Full-spec alignment (closest deterministic mapping to your spec):
+    - 0.80 (三方共振): bull trend + 三陽開泰 + vol_ratio>1.5 + bias60<10 + (latest gap not filled-by-close)
+      Note: N字突破 is not explicitly detected yet; we use「攻擊量」as a proxy for now.
+    - 0.60 (偏多): bull trend + (三陽開泰 or vol_ratio>=1.5 or bias60<15) + no hard risk flags
+    - 0.40 (分歧): default when not strong bull, but no hard risk flags
+    - 0.20 (轉空): any hard risk flag true
+      - island_reversal
+      - gap_filled_by_close
+      - vol_spike_defense_broken
+      - bearish omens (engulf / distribution_day)
+      - bear trend + ma20_slope<0
 
     Notes:
-    - gap_open/gap_filled refer to the *latest gap* status (open means not filled).
-    - vol_spike_defense_broken means price < defense_price.
+    - gap_open/gap_filled are legacy intraday gap status.
+    - gap_filled_by_close is the 收盤價準則 status.
     """
     if None in (p_now, ma150, vol_ratio, ma20_slope, san_yang):
         return None
@@ -87,23 +93,29 @@ def choose_win_rate(
 
     open_gap = (gap_open is True) and (gap_filled is False)
 
-    # Hard risk-off conditions
-    if (island_reversal is True) or (vol_spike_defense_broken is True) or (bear and ma20_slope < 0):
+    any_bearish_omen = (bearish_long_black_engulf is True) or (bearish_distribution_day is True)
+
+    # Hard risk-off conditions (W=0.2)
+    if (
+        (island_reversal is True)
+        or (gap_filled_by_close is True)
+        or (vol_spike_defense_broken is True)
+        or any_bearish_omen
+        or (bear and ma20_slope < 0)
+    ):
         return 0.20
 
-    # If latest gap is an open GAP_DOWN, treat as risk-off (caller should map this into gap_open/gap_filled)
-    if open_gap and (gap_open is True):
-        # still allow caller to differentiate up/down elsewhere; conservative default
+    # Conservative: open gap treated as risk-off until we classify up/down in the caller
+    if open_gap:
         return 0.20
 
-    bias_ok = (bias60 is not None) and (bias60 >= 0)
-    no_island = island_reversal is not True
-    not_open_gap = not open_gap
+    bias_safe = (bias60 is not None) and (bias60 < 10)
+    bias_ok = (bias60 is not None) and (bias60 < 15)
 
-    if bull and (san_yang is True) and (vol_ratio >= 1.0) and bias_ok and no_island and not_open_gap:
+    if bull and (san_yang is True) and (vol_ratio > 1.5) and bias_safe and (gap_filled_by_close is not True):
         return 0.80
 
-    if bull and no_island and ((san_yang is True) or (vol_ratio >= 1.5) or bias_ok):
+    if bull and ((san_yang is True) or (vol_ratio >= 1.5) or bias_ok):
         return 0.60
 
     return 0.40
