@@ -50,75 +50,108 @@ def trend_regime(p_now: float | None, ma150: float | None) -> str:
 def choose_win_rate(
     p_now: float | None,
     ma150: float | None,
+    ma50: float | None,
+    ma200: float | None,
     vol_ratio: float | None,
     ma20_slope: float | None,
     san_yang: bool | None,
     *,
+    rsi14: float | None = None,
+    rule_35_zone: str | None = None,
     bias60: float | None = None,
     gap_open: bool | None = None,
     gap_filled: bool | None = None,
     gap_filled_by_close: bool | None = None,
+    gap_direction_by_close: str | None = None,  # 'UP' | 'DOWN' | 'UNKNOWN'
     island_reversal: bool | None = None,
     vol_spike_defense_broken: bool | None = None,
     bearish_long_black_engulf: bool | None = None,
     bearish_distribution_day: bool | None = None,
     bearish_price_up_vol_down: bool | None = None,
 ) -> float | None:
-    """Step-ladder win-rate W (0.8/0.6/0.4/0.2) used in Kelly.
+    """Base+Bonus+Penalty win-rate W used in Kelly.
+
+    Your updated spec:
+    - Step 1 Base W
+      - Bull: Close > MA150 AND MA50 > MA200 => base=0.60
+      - Bear: Close < MA150 OR MA50 <= MA200 => base=0.30
+
+    - Step 2 Bonus
+      - 三方共振 +0.10: 三陽開泰
+      - 價值回歸 +0.30: rule_35_zone == 'GOLD' and RSI<30
+      - 多頭動能 +0.10: vol_ratio>1 and bias60<10
+      - 收盤封閉向下跳空的缺口 +0.10: gap_filled_by_close and gap_direction_by_close=='DOWN'
+
+    - Step 3 Penalty (no longer veto)
+      - 島狀反轉 -0.10
+      - 收盤封閉向上跳空的缺口 -0.10: gap_filled_by_close and gap_direction_by_close=='UP'
+      - 爆量防守跌破 -0.10
+      - 凶多吉少 -0.20: engulf or distribution_day
+
+    - Step 4 Clamp: W in [0.15, 0.85]
 
     Evidence-first:
-    - If the core trend/volume fields are missing, return None.
-
-    Full-spec alignment (closest deterministic mapping to your spec):
-    - 0.80 (三方共振): bull trend + 三陽開泰 + vol_ratio>1.5 + bias60<10 + (latest gap not filled-by-close)
-      Note: N字突破 is not explicitly detected yet; we use「攻擊量」as a proxy for now.
-    - 0.60 (偏多): bull trend + (三陽開泰 or vol_ratio>=1.5 or bias60<15) + no hard risk flags
-    - 0.40 (分歧): default when not strong bull, but no hard risk flags
-    - 0.20 (轉空): any hard risk flag true
-      - island_reversal
-      - gap_filled_by_close
-      - vol_spike_defense_broken
-      - bearish omens (engulf / distribution_day)
-      - bear trend + ma20_slope<0
-
-    Notes:
-    - gap_open/gap_filled are legacy intraday gap status.
-    - gap_filled_by_close is the 收盤價準則 status.
+    - If core inputs are missing, return None.
     """
-    if None in (p_now, ma150, vol_ratio, ma20_slope, san_yang):
+
+    if None in (p_now, ma150, ma50, ma200, vol_ratio, ma20_slope, san_yang):
         return None
 
-    bull = p_now > ma150
-    bear = p_now <= ma150
+    bull = (p_now > ma150) and (ma50 > ma200)
+    bear = (p_now <= ma150) or (ma50 <= ma200)
 
-    open_gap = (gap_open is True) and (gap_filled is False)
+    # By definition above, mixed signals still count as bear base.
+    base_w = 0.60 if bull else 0.30 if bear else 0.30
 
+    w = base_w
+
+    # Bonus: 三方共振
+    if san_yang is True:
+        w += 0.10
+
+    # Bonus: 價值回歸
+    if (rule_35_zone == "GOLD") and (rsi14 is not None) and (rsi14 < 30):
+        w += 0.30
+
+    # Bonus: 多頭動能
+    # Only applies when the base regime is bull.
+    if bull and (bias60 is not None) and (vol_ratio > 1.0) and (bias60 < 10):
+        w += 0.10
+
+    # Gap-related bonus/penalty
+    if gap_filled_by_close is True:
+        if gap_direction_by_close == "DOWN":
+            w += 0.10
+        elif gap_direction_by_close == "UP":
+            w -= 0.10
+
+    # Penalty: island reversal
+    if island_reversal is True:
+        w -= 0.10
+
+    # Penalty: massive volume defense broken
+    if vol_spike_defense_broken is True:
+        w -= 0.10
+
+    # Penalty: bearish omens
     any_bearish_omen = (bearish_long_black_engulf is True) or (bearish_distribution_day is True)
+    if any_bearish_omen:
+        w -= 0.20
 
-    # Hard risk-off conditions (W=0.2)
-    if (
-        (island_reversal is True)
-        or (gap_filled_by_close is True)
-        or (vol_spike_defense_broken is True)
-        or any_bearish_omen
-        or (bear and ma20_slope < 0)
-    ):
-        return 0.20
-
-    # Conservative: open gap treated as risk-off until we classify up/down in the caller
+    # Conservative legacy intraday open gap remains risk-off signal.
+    # Kept as a small penalty (not veto) to match the "not one-vote veto" philosophy.
+    open_gap = (gap_open is True) and (gap_filled is False)
     if open_gap:
-        return 0.20
+        w -= 0.10
 
-    bias_safe = (bias60 is not None) and (bias60 < 10)
-    bias_ok = (bias60 is not None) and (bias60 < 15)
+    # Clamp + stabilize float rounding
+    w = float(round(w, 4))
 
-    if bull and (san_yang is True) and (vol_ratio > 1.5) and bias_safe and (gap_filled_by_close is not True):
-        return 0.80
-
-    if bull and ((san_yang is True) or (vol_ratio >= 1.5) or bias_ok):
-        return 0.60
-
-    return 0.40
+    if w < 0.15:
+        return 0.15
+    if w > 0.85:
+        return 0.85
+    return w
 
 
 @dataclass(frozen=True)

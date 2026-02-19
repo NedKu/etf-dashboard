@@ -97,12 +97,7 @@ def main() -> None:
         stop_loss_pct = st.number_input("Stop-loss %", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
         trailing_stop_pct = st.number_input("Trailing stop % (from P_high)", min_value=0.5, max_value=30.0, value=5.0, step=0.5)
         max_position_pct = st.number_input("Max position % (cap)", min_value=1.0, max_value=50.0, value=20.0, step=1.0)
-        gap_threshold = st.number_input("Gap threshold % (deprecated)", min_value=0.0, max_value=5.0, value=0.0, step=0.1)
-        island_min_days = st.number_input("Island min days", min_value=1, max_value=10, value=2, step=1)
-        island_max_days = st.number_input("Island max days", min_value=2, max_value=30, value=10, step=1)
         laowang_lookback = st.number_input("老王 lookback (days)", min_value=30, max_value=400, value=120, step=10)
-        vol_spike_mult = st.number_input("Volume spike mult", min_value=1.0, max_value=10.0, value=2.0, step=0.25)
-        vol_spike_window = st.number_input("Volume spike window (days)", min_value=20, max_value=260, value=20, step=10)
         min_rr = st.number_input(
             "Min R/R (target÷risk)",
             min_value=0.0,
@@ -132,14 +127,12 @@ def main() -> None:
             detect_last_gap,
             gap_reclaim_within_3_days,
             massive_volume_levels,
-            midpoint_defense,
         )
 
         gap = detect_last_gap(snap.history, gap_threshold=0.0, lookback_days=int(laowang_lookback))
         reclaim = gap_reclaim_within_3_days(gap, snap.history)
-        mv = massive_volume_levels(snap.history, lookback_days=int(vol_spike_window))
-        mdp = midpoint_defense(snap.history, body_ratio_min=0.6)
-        omen = bearish_omens(snap.history, vol_avg_window=int(vol_spike_window))
+        mv = massive_volume_levels(snap.history, lookback_days=int(vol_window))
+        omen = bearish_omens(snap.history, vol_avg_window=int(vol_window))
 
         st.caption(
             "老王："
@@ -147,7 +140,6 @@ def main() -> None:
             f"filled_by_close={gap.is_filled_by_close} ({gap.fill_date_by_close}) | "
             f"reclaim_3d={reclaim.is_reclaim} ({reclaim.reclaim_date}) | "
             f"massive_low={mv.low} (Low_broken={mv.low_broken}) massive_high={mv.high} (High_broken={mv.high_broken}) | "
-            f"midpoint={mdp.midpoint} (broken={mdp.is_broken}, date={mdp.date}) | "
             f"engulf={omen.long_black_engulf}, dist_day={omen.distribution_day}, up_vol_down={omen.price_up_vol_down}"
         )
 
@@ -192,10 +184,6 @@ def main() -> None:
             fig.add_hline(y=float(mv.low), line_width=1.5, line_dash="dash", line_color="red", annotation_text="Massive vol low", row=1, col=1)
         if mv.high is not None:
             fig.add_hline(y=float(mv.high), line_width=1.5, line_dash="dash", line_color="green", annotation_text="Massive vol high", row=1, col=1)
-
-        # Midpoint defense
-        if mdp.midpoint is not None:
-            fig.add_hline(y=float(mdp.midpoint), line_width=1.2, line_dash="dot", line_color="#ff7f0e", annotation_text="Midpoint defense", row=1, col=1)
 
         for w in [int(x) for x in ma_windows]:
             col = f"MA{w}"
@@ -269,11 +257,11 @@ def main() -> None:
                         max_position_pct=float(max_position_pct) / 100.0,
                         trailing_stop_pct=float(trailing_stop_pct) / 100.0,
                         gap_threshold=0.0,
-                        island_min_days=int(island_min_days),
-                        island_max_days=int(island_max_days),
+                        island_min_days=2,
+                        island_max_days=10,
                         laowang_lookback_days=int(laowang_lookback),
-                        vol_spike_mult=float(vol_spike_mult),
-                        vol_spike_window=int(vol_spike_window),
+                        vol_spike_mult=2.0,
+                        vol_spike_window=int(vol_window),
                     )
                     st.success(f"Report generated: {out_path}")
                 except Exception as e:

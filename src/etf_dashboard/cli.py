@@ -19,7 +19,6 @@ from .laowang import (
     detect_last_gap,
     gap_reclaim_within_3_days,
     massive_volume_levels,
-    midpoint_defense,
 )
 from .report_md import ReportInputs, render_report_md
 from .rules import choose_win_rate, san_yang_kai_tai, trend_regime, volume_signal
@@ -72,11 +71,6 @@ class Derived:
     vol_spike_resistance: float | None
     vol_spike_defense_broken: bool | None
     vol_spike_resistance_broken: bool | None
-
-    # Midpoint defense (長紅中軸)
-    midpoint_defense: float | None
-    midpoint_defense_broken: bool | None
-    midpoint_defense_date: str | None
 
     # 凶多吉少
     bearish_long_black_engulf: bool | None
@@ -177,12 +171,6 @@ def _compute_from_history(
     vol_spike_defense_broken = mv.low_broken
     vol_spike_resistance_broken = mv.high_broken
 
-    # 長紅中軸防守 (spec): latest strong red candle, midpoint=(High+Low)/2, broken if Close<midpoint
-    mdp = midpoint_defense(hist, body_ratio_min=0.6)
-    midpoint_defense_price = mdp.midpoint
-    midpoint_defense_broken = mdp.is_broken
-    midpoint_defense_date = mdp.date
-
     omen = bearish_omens(hist, vol_avg_window=int(vol_spike_window))
     bearish_long_black_engulf = omen.long_black_engulf
     bearish_price_up_vol_down = omen.price_up_vol_down
@@ -224,9 +212,6 @@ def _compute_from_history(
         vol_spike_resistance=vol_spike_resistance,
         vol_spike_defense_broken=vol_spike_defense_broken,
         vol_spike_resistance_broken=vol_spike_resistance_broken,
-        midpoint_defense=midpoint_defense_price,
-        midpoint_defense_broken=midpoint_defense_broken,
-        midpoint_defense_date=midpoint_defense_date,
         bearish_long_black_engulf=bearish_long_black_engulf,
         bearish_price_up_vol_down=bearish_price_up_vol_down,
         bearish_distribution_day=bearish_distribution_day,
@@ -408,7 +393,7 @@ def build_report(
         f"P_high 來源：{p_high_src}",
         "BIAS_60 = ((P_now - MA60) / MA60) * 100%",
         f"Trailing stop = P_high × (1 - trailing_stop_pct)；本次 trailing_stop_pct={trailing_stop_pct}",
-        "老王：缺口採嚴格定義（Low>前高 / High<前低，不用 gap_threshold）、島狀反轉視窗 2~10 天、爆量=區間最高量且 > 均量×倍數（預設 1.5）。",
+        "老王：缺口採嚴格定義（Low>前高 / High<前低，不用 gap_threshold）、島狀反轉視窗 2~10 天、爆量=區間最高量。",
         "Kelly 最終倉位受 max_position_pct 上限約束（預設 20%）。",
     ]
 
@@ -458,16 +443,30 @@ def build_report(
             "target = entry + MinR*(entry-stop)。"
         )
 
+    # Gap direction (by naming convention): contains 'UP'/'DOWN' => UP/DOWN else UNKNOWN
+    gap_dir = "UNKNOWN"
+    if isinstance(d.gap_kind, str):
+        k = d.gap_kind.upper()
+        if "UP" in k:
+            gap_dir = "UP"
+        elif "DOWN" in k:
+            gap_dir = "DOWN"
+
     w = choose_win_rate(
         d.p_now,
         d.ma150,
+        d.ma50,
+        d.ma200,
         vol.vol_ratio,
         d.ma20_slope,
         sy,
+        rsi14=d.rsi14,
+        rule_35_zone=zone,
         bias60=d.bias60,
         gap_open=d.gap_open,
         gap_filled=d.gap_filled,
         gap_filled_by_close=d.gap_filled_by_close,
+        gap_direction_by_close=gap_dir,
         island_reversal=d.island_reversal,
         vol_spike_defense_broken=d.vol_spike_defense_broken,
         bearish_long_black_engulf=d.bearish_long_black_engulf,
@@ -528,6 +527,18 @@ def build_report(
 
     local_now = datetime.now().astimezone()
 
+    # Re-compute detailed 老王 objects here (report needs dates/levels; Derived keeps booleans/levels only)
+    gap = detect_last_gap(snap.history, gap_threshold=float(gap_threshold), lookback_days=int(laowang_lookback_days))
+    reclaim = gap_reclaim_within_3_days(gap, snap.history)
+    island = detect_island_reversal(
+        snap.history,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+    mv = massive_volume_levels(snap.history, lookback_days=int(vol_spike_window))
+
     inp = ReportInputs(
         ticker=ticker,
         name=(snap.info.get("shortName") if isinstance(snap.info, dict) else None),
@@ -553,7 +564,7 @@ def build_report(
         gap_lower=d.gap_lower,
         gap_upper=d.gap_upper,
         gap_last_date=(gap.last_gap.date if gap.last_gap is not None else None),
-        gap_prev_date=(gap.prev_date if gap.prev_date is not None else None),
+        gap_prev_date=(gap.last_gap.prev_date if gap.last_gap is not None else None),
         gap_filled_by_close=d.gap_filled_by_close,
         gap_fill_date_by_close=d.gap_fill_date_by_close,
         gap_fill_close_by_close=(gap.fill_close_by_close if gap.fill_close_by_close is not None else None),
@@ -561,10 +572,10 @@ def build_report(
         gap_reclaim_date=d.gap_reclaim_date,
         gap_reclaim_level=(reclaim.reclaim_level if reclaim.reclaim_level is not None else None),
         island_reversal=d.island_reversal,
-        island_gap_up_date=(island.gap_up.date if island is not None else None),
-        island_gap_down_date=(island.gap_down.date if island is not None else None),
+        island_gap_up_date=(island.start_gap_up.date if island is not None else None),
+        island_gap_down_date=(island.end_gap_down.date if island is not None else None),
         vol_spike=d.vol_spike,
-        vol_spike_date=(mv.date if mv is not None else None),
+        vol_spike_date=mv.date,
         vol_spike_defense=d.vol_spike_defense,
         vol_spike_resistance=d.vol_spike_resistance,
         vol_spike_defense_broken=d.vol_spike_defense_broken,
@@ -598,6 +609,10 @@ def build_report(
         target=target,
         r_ratio=r_val,
         kelly_w=w,
+        kelly_w_base=None,
+        kelly_w_bonus=None,
+        kelly_w_penalty=None,
+        kelly_w_components=[],
         kelly_f_raw=kelly_f_raw,
         kelly_f_capped=kelly_f_capped,
         san_yang=sy_str,

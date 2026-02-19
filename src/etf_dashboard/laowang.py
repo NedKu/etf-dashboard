@@ -53,23 +53,6 @@ class ReclaimSignal:
     reclaim_date: str | None
     days_since_fill: int | None
     reclaim_level: float | None
-@dataclass(frozen=True)
-class MidpointDefense:
-    """長紅中軸防守 (support) from the latest strong red candle.
-
-    Spec (confirmed):
-    - long red candle = latest candle where:
-      - Close > Open (red)
-      - body_ratio = (Close-Open)/(High-Low) >= 0.6 (and High>Low)
-    - midpoint = (High + Low) / 2
-    - broken when Close < midpoint (close-based rule)
-    """
-
-    midpoint: float | None
-    date: str | None
-    is_broken: bool | None
-
-
 
 
 @dataclass(frozen=True)
@@ -374,44 +357,6 @@ def gap_reclaim_within_3_days(gap: GapStatus, hist: pd.DataFrame) -> ReclaimSign
             )
 
     return ReclaimSignal(is_reclaim=False, reclaim_date=None, days_since_fill=None, reclaim_level=reclaim_level)
-def midpoint_defense(hist: pd.DataFrame, *, body_ratio_min: float = 0.6) -> MidpointDefense:
-    """Compute midpoint defense level from the latest strong red candle."""
-    if hist is None or hist.empty or not _required_columns(hist):
-        return MidpointDefense(midpoint=None, date=None, is_broken=None)
-
-    df = hist[["Open", "High", "Low", "Close"]].astype(float).copy()
-    df.index = pd.to_datetime(df.index)
-
-    hit_i: int | None = None
-    for i in range(len(df) - 1, -1, -1):
-        o = float(df["Open"].iloc[i])
-        h = float(df["High"].iloc[i])
-        l = float(df["Low"].iloc[i])
-        c = float(df["Close"].iloc[i])
-
-        rng = h - l
-        if rng <= 0:
-            continue
-        if not (c > o):
-            continue
-
-        body_ratio = (c - o) / rng
-        if body_ratio >= float(body_ratio_min):
-            hit_i = i
-            break
-
-    if hit_i is None:
-        return MidpointDefense(midpoint=None, date=None, is_broken=None)
-
-    h = float(df["High"].iloc[hit_i])
-    l = float(df["Low"].iloc[hit_i])
-    midpoint = (h + l) / 2.0
-
-    c_latest = float(df["Close"].iloc[-1])
-    is_broken = c_latest < midpoint
-
-    return MidpointDefense(midpoint=midpoint, date=_to_date_str(df.index[hit_i]), is_broken=is_broken)
-
 
 
 

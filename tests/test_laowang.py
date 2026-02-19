@@ -6,7 +6,6 @@ from etf_dashboard.laowang import (
     detect_last_gap,
     gap_reclaim_within_3_days,
     massive_volume_levels,
-    midpoint_defense,
 )
 
 
@@ -58,26 +57,6 @@ def test_gap_filled_by_close_and_reclaim_3d():
     rec = gap_reclaim_within_3_days(gap, hist)
     assert rec.is_reclaim is True
     assert rec.reclaim_date is not None
-
-
-def test_midpoint_defense_latest_strong_red():
-    hist = _df(
-        [
-            # not red
-            {"Open": 10, "High": 11, "Low": 9, "Close": 9.5, "Volume": 100},
-            # red but body ratio = (11-10)/(12-9)=0.333 < 0.6
-            {"Open": 10, "High": 12, "Low": 9, "Close": 11, "Volume": 100},
-            # strong red: body ratio = (12-10)/(12.5-9.5)=0.666 >= 0.6 => choose this
-            {"Open": 10, "High": 12.5, "Low": 9.5, "Close": 12, "Volume": 100},
-            # latest close below midpoint(=(12.5+9.5)/2=11.0) => broken
-            {"Open": 11.2, "High": 11.5, "Low": 10.5, "Close": 10.9, "Volume": 100},
-        ]
-    )
-
-    mdp = midpoint_defense(hist, body_ratio_min=0.6)
-    assert mdp.midpoint == 11.0
-    assert mdp.date == "2024-01-03"
-    assert mdp.is_broken is True
 
 
 def test_bearish_omens_long_black_engulf():
