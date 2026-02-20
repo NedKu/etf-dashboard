@@ -452,7 +452,9 @@ def build_report(
         elif "DOWN" in k:
             gap_dir = "DOWN"
 
-    w = choose_win_rate(
+    from .rules import choose_win_rate_breakdown
+
+    w_bd = choose_win_rate_breakdown(
         d.p_now,
         d.ma150,
         d.ma50,
@@ -473,6 +475,8 @@ def build_report(
         bearish_distribution_day=d.bearish_distribution_day,
         bearish_price_up_vol_down=d.bearish_price_up_vol_down,
     )
+    w = w_bd.w_clamped
+
     kelly_f_raw = None
     kelly_f_capped = None
     if None not in (w, d.p_now, stop, target, r_val) and w is not None and stop is not None and target is not None:
@@ -609,10 +613,13 @@ def build_report(
         target=target,
         r_ratio=r_val,
         kelly_w=w,
-        kelly_w_base=None,
-        kelly_w_bonus=None,
-        kelly_w_penalty=None,
-        kelly_w_components=[],
+        kelly_w_base=w_bd.base,
+        kelly_w_bonus=w_bd.bonus_total,
+        kelly_w_penalty=w_bd.penalty_total,
+        kelly_w_components=[
+            f"{c.kind}:{c.name} {c.delta:+.2f} {c.status}" + (f" missing={','.join(c.missing_fields)}" if c.missing_fields else "")
+            for c in w_bd.components
+        ],
         kelly_f_raw=kelly_f_raw,
         kelly_f_capped=kelly_f_capped,
         san_yang=sy_str,

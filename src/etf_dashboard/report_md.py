@@ -203,12 +203,18 @@ class ReportInputs:
     # Transparency
     notes: list[str]
 
-
 def _render_notes(notes: list[str]) -> str:
     if not notes:
         return "- (none)"
     # Avoid intermediate list; keep output deterministic.
     return "\n".join(f"- {n}" for n in notes)
+
+
+def _render_list(items: list[str]) -> str:
+    if not items:
+        return "- (none)"
+    return "\n".join(f"  - {x}" for x in items)
+
 
 
 def render_report_md(inp: ReportInputs) -> str:
@@ -309,7 +315,8 @@ def render_report_md(inp: ReportInputs) -> str:
   - 基礎 Base = {fmt(inp.kelly_w_base, 2)}
   - 加分 Bonus = {fmt(inp.kelly_w_bonus, 2)}
   - 扣分 Penalty = {fmt(inp.kelly_w_penalty, 2)}
-  - 明細：{("；".join(inp.kelly_w_components) if inp.kelly_w_components else "(none)")}
+  - 明細：
+{_render_list(inp.kelly_w_components)}
   - 最終（含上下限 0.15~0.85）W = {fmt(inp.kelly_w, 2)}
 - 凱利倉位：f = (W × (R+1) - 1) / R
   - f = ({fmt(inp.kelly_w, 4)} × ({fmt(inp.r_ratio, 4)} + 1) - 1) / {fmt(inp.r_ratio, 4)}
