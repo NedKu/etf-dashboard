@@ -1,4 +1,4 @@
-from .cli import main
+from etf_dashboard.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
