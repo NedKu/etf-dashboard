@@ -137,9 +137,18 @@ class ReportInputs:
     gap_reclaim_date: str | None
     gap_reclaim_level: float | None
 
-    island_reversal: bool | None
-    island_gap_up_date: str | None
-    island_gap_down_date: str | None
+    # 島狀反轉（分頂部/底部，避免報告語意混淆）
+    island_reversal_bearish: bool | None
+    island_bear_gap_up_date: str | None
+    island_bear_gap_down_date: str | None
+
+    island_reversal_bullish: bool | None
+    island_bull_gap_down_date: str | None
+    island_bull_gap_up_date: str | None
+
+    # Summary-only: show only the latest island reversal event (top/bottom) to avoid confusion.
+    island_reversal_latest_label: str | None  # '頂部' | '底部' | 'none'
+    island_reversal_latest_date: str | None
 
     # 爆量（規格）：lookback_days 內最高量（massive_vol），同時提供防守/壓力與突破狀態
     vol_spike: bool | None
@@ -152,6 +161,7 @@ class ReportInputs:
     bearish_long_black_engulf: bool | None
     bearish_price_up_vol_down: bool | None
     bearish_distribution_day: bool | None
+    san_sheng_wu_nai: bool | None
 
     v_today: float | None
     v_avg: float | None
@@ -259,7 +269,7 @@ def render_report_md(inp: ReportInputs) -> str:
 | **最新股價 (P_now)** | {p_now} | 60日乖離率 BIAS_60 = ((P_now - MA60) / MA60) × 100% = {bias60_pct}% |
 | **移動停利 (Trailing stop)** | P_high×(1-{trailing_stop_pct}) = {trailing_stop} | {trailing_stop_status} |
 | **老王：缺口(收盤)/收復/島狀/防守** | gap={_fmt_text(inp.gap_kind)}, zone=[{fmt(inp.gap_lower)},{fmt(inp.gap_upper)}] | filled_by_close={_fmt_bool(inp.gap_filled_by_close)} ({_fmt_text(inp.gap_fill_date_by_close)}), reclaim_3d={_fmt_bool(inp.gap_reclaim_3d)} ({_fmt_text(inp.gap_reclaim_date)}) |
-| **老王：爆量/凶多吉少/三陽開泰** | massive_low={fmt(inp.vol_spike_defense)} (Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}), massive_high={fmt(inp.vol_spike_resistance)} (High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}) | 凶多吉少={_fmt_bool(inp.bearish_long_black_engulf)},三陽開泰={inp.san_yang} |
+| **老王：爆量/凶多吉少/三聲無奈/三陽開泰** | massive_low={fmt(inp.vol_spike_defense)} (Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}), massive_high={fmt(inp.vol_spike_resistance)} (High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}) | 凶多吉少(長黑破三線)={_fmt_bool(inp.bearish_long_black_engulf)}, 三聲無奈={_fmt_bool(inp.san_sheng_wu_nai)}, 三陽開泰={inp.san_yang} |
 | **短期均線** | MA5={fmt(inp.ma5)}, MA10={fmt(inp.ma10)} | - |
 | **中期均線** | MA20={ma20}, MA50={fmt(inp.ma50)} | 生命線守護（MA20）：{ma_guard_status} |
 | **長期均線** | MA60={ma60}, MA150={fmt(inp.ma150)}, MA200={fmt(inp.ma200)} | 趨勢位階：{inp.trend_regime} |
@@ -303,12 +313,27 @@ def render_report_md(inp: ReportInputs) -> str:
 - 最新缺口：{_fmt_text(inp.gap_kind)}（gap_date={_fmt_text(inp.gap_last_date)}；prev_date={_fmt_text(inp.gap_prev_date)}；gap_zone=[{fmt(inp.gap_lower)}, {fmt(inp.gap_upper)}]）
 - 收盤封閉缺口：{_fmt_bool(inp.gap_filled_by_close)}（fill_date={_fmt_text(inp.gap_fill_date_by_close)}；fill_close={fmt(inp.gap_fill_close_by_close)}）
 - 假跌破收復(3日)：{_fmt_bool(inp.gap_reclaim_3d)}（reclaim_date={_fmt_text(inp.gap_reclaim_date)}；reclaim_level={fmt(inp.gap_reclaim_level)}）
-- 島狀反轉：{_fmt_bool(inp.island_reversal)}（gap_up_date={_fmt_text(inp.island_gap_up_date)}；gap_down_date={_fmt_text(inp.island_gap_down_date)}）
+- 頂部島狀反轉（Bearish）：{_fmt_bool(inp.island_reversal_bearish)}（gap_up_date={_fmt_text(inp.island_bear_gap_up_date)}；gap_down_date={_fmt_text(inp.island_bear_gap_down_date)}）
+- 底部島狀反轉（Bullish）：{_fmt_bool(inp.island_reversal_bullish)}（gap_down_date={_fmt_text(inp.island_bull_gap_down_date)}；gap_up_date={_fmt_text(inp.island_bull_gap_up_date)}）
+
+**判斷標準（用來解釋「現況是什麼」）**
+- 計分規則（W）：若頂部/底部兩者同時存在，**只採用較新的那一種**（比較：頂部=gap_down_date vs 底部=gap_up_date；取日期較晚者），避免舊訊號重複干擾。
+- 頂部島狀反轉（Bearish / 扣分 -0.10，反映「起漲後出現孤島、後續跳空下跌」的偏空結構）
+  - 先出現 **向上跳空 GAP_UP**：Low[t] > High[t-1]
+  - 在 **2~10** 個交易日內再出現 **向下跳空 GAP_DOWN**：High[s] < Low[s-1]
+  - 且兩個缺口區間需有「重疊/回到前缺口區」：gap_down.upper >= gap_up.lower
+- 底部島狀反轉（Bullish / 加分 +0.10，反映「跳空下跌後形成孤島、後續跳空上漲」的偏多結構）
+  - 先出現 **向下跳空 GAP_DOWN**：High[t] < Low[t-1]
+  - 在 **2~10** 個交易日內再出現 **向上跳空 GAP_UP**：Low[s] > High[s-1]
+  - 且兩個缺口區間需有「重疊/回到前缺口區」：gap_up.lower <= gap_down.upper
+
 - 爆量防守/壓力：
   - massive_date={_fmt_text(inp.vol_spike_date)}
   - massive_low={fmt(inp.vol_spike_defense)}（Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}）
   - massive_high={fmt(inp.vol_spike_resistance)}（High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}）
-- 凶多吉少：engulf={_fmt_bool(inp.bearish_long_black_engulf)}, dist_day={_fmt_bool(inp.bearish_distribution_day)}, up_vol_down={_fmt_bool(inp.bearish_price_up_vol_down)}
+- 凶多吉少（長黑破三線）：{_fmt_bool(inp.bearish_long_black_engulf)}（長黑K 且 Close 同時跌破 MA5/MA10/MA20）
+- 凶多吉少（輔助觀察，不計分）：dist_day={_fmt_bool(inp.bearish_distribution_day)}, up_vol_down={_fmt_bool(inp.bearish_price_up_vol_down)}
+- 三聲無奈：{_fmt_bool(inp.san_sheng_wu_nai)}（MA5/10/20 斜率皆下彎 + MA20>MA10>MA5 + P_now 低於 MA5/10/20）
 
 #### 2.4 凱利公式（Kelly Criterion）逐步代入
 - 勝率 W（規則推導）：
@@ -326,8 +351,9 @@ def render_report_md(inp: ReportInputs) -> str:
 ### 3. 👨‍⚕️ 綜合診斷
 - 量價動能（哲哲）：量能判定 = {inp.vol_label}（倍數 {fmt(inp.vol_ratio, 2)}）;60 日乖離率 = {bias60_pct}%;MACD 動能柱 = {fmt(inp.macd_hist)}
 - 趨勢紀律（掃地僧）：長線位階 = {inp.trend_regime}；大盤濾網 = {inp.bench_regime}
-- 線型結構（老王）：凶多吉少 = {_fmt_bool(inp.bearish_long_black_engulf)}；三陽開泰 = {inp.san_yang}
-  ；島狀反轉：{_fmt_bool(inp.island_reversal)}；缺口：{_fmt_text(inp.gap_kind)}（open={_fmt_bool(inp.gap_open)}, filled={_fmt_bool(inp.gap_filled)}）
+- 線型結構（老王）：凶多吉少(長黑破三線) = {_fmt_bool(inp.bearish_long_black_engulf)}；三聲無奈 = {_fmt_bool(inp.san_sheng_wu_nai)}；三陽開泰 = {inp.san_yang}
+  ；島狀反轉(最近)：{_fmt_text(inp.island_reversal_latest_label)}（date={_fmt_text(inp.island_reversal_latest_date)}）
+  ；缺口：{_fmt_text(inp.gap_kind)}（open={_fmt_bool(inp.gap_open)}, filled={_fmt_bool(inp.gap_filled)}）
   ；爆量防守/壓力：low={fmt(inp.vol_spike_defense)}（Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}）, high={fmt(inp.vol_spike_resistance)}（High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}）
 
 ### 4. 🚀 最終操作指令 (Final Verdict)

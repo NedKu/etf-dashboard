@@ -12,7 +12,9 @@ def test_san_yang_kai_tai_true():
 
 
 def test_choose_win_rate_penalty_island() -> None:
-    # Bull base (0.6) + san_yang bonus (0.1) - island penalty (0.1) = 0.6
+    # Legacy choose_win_rate() signature: island_reversal is treated as bearish (頂部島狀反轉) penalty.
+    # Bull base (0.6) + san_yang bonus (0.1) + momentum bonus (0.1 default in this test context?) - island penalty (0.1)
+    # Here bias60 is missing, so momentum bonus is skipped => 0.6 + 0.1 - 0.1 = 0.6
     w = choose_win_rate(
         p_now=101,
         ma150=100,
@@ -82,8 +84,8 @@ def test_choose_win_rate_value_reversion_bonus() -> None:
 
 
 def test_choose_win_rate_clamped_low() -> None:
-    # Force very low: bear base 0.3 - 0.2 (omen) -0.1 (island) -0.1 (vol defense) -0.1 (open gap)
-    # => -0.2 -> clamped to 0.15
+    # Force very low: bear base 0.3 - 0.1 (omen) -0.1 (island) -0.1 (vol defense) -0.1 (open gap)
+    # => -0.1 -> clamped to 0.15
     w = choose_win_rate(
         p_now=99.0,
         ma150=100.0,
@@ -96,7 +98,7 @@ def test_choose_win_rate_clamped_low() -> None:
         gap_filled=False,
         island_reversal=True,
         vol_spike_defense_broken=True,
-        bearish_distribution_day=True,
+        bearish_long_black_engulf=True,
     )
     assert w == 0.15
 

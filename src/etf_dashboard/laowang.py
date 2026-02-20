@@ -246,7 +246,7 @@ def detect_island_reversal(
     max_separation_days: int = 10,
     lookback_days: int = 120,
 ) -> IslandReversal | None:
-    """Detect simplified island reversal using strict gaps.
+    """Detect *bearish* island reversal using strict gaps.
 
     Spec intent:
     - After an upward gap, a downward gap appears shortly after (island), forming a sell/stop warning.
@@ -254,6 +254,9 @@ def detect_island_reversal(
     Rules (strict, no threshold):
     - GAP_UP at t if Low[t] > High[t-1]
     - GAP_DOWN at s if High[s] < Low[s-1]
+
+    Overlap requirement (to avoid unrelated gaps):
+    - gap_down.upper >= gap_up.lower
 
     Note: gap_threshold is ignored (kept for backward compatibility with callers).
     """
@@ -307,6 +310,82 @@ def detect_island_reversal(
 
             # overlap/return into prior gap zone
             if float(gap_down.upper) >= float(gap_up.lower):
+                latest = IslandReversal(start_gap_up=gap_up, end_gap_down=gap_down)
+
+    return latest
+
+
+def detect_island_reversal_bullish(
+    hist: pd.DataFrame,
+    gap_threshold: float = 0.003,
+    min_separation_days: int = 2,
+    max_separation_days: int = 10,
+    lookback_days: int = 120,
+) -> IslandReversal | None:
+    """Detect *bullish* island reversal using strict gaps.
+
+    Spec intent:
+    - After a downward gap, an upward gap appears shortly after (island), forming a buy/turning-point hint.
+
+    Rules (strict, no threshold):
+    - GAP_DOWN at t if High[t] < Low[t-1]
+    - GAP_UP at s if Low[s] > High[s-1]
+
+    Overlap requirement (to avoid unrelated gaps):
+    - gap_up.lower <= gap_down.upper
+
+    Note: gap_threshold is ignored (kept for backward compatibility with callers).
+    """
+    _ = gap_threshold
+
+    if hist is None or hist.empty or not _required_columns(hist):
+        return None
+
+    df = hist[["Open", "High", "Low", "Close", "Volume"]].astype(float).tail(max(int(lookback_days) + 2, 20)).copy()
+    if len(df) < 3:
+        return None
+
+    df.index = pd.to_datetime(df.index)
+    highs = df["High"].to_numpy()
+    lows = df["Low"].to_numpy()
+
+    latest: IslandReversal | None = None
+
+    for i in range(1, len(df) - 1):
+        prev_low = float(lows[i - 1])
+        hi = float(highs[i])
+        if not (hi < prev_low):
+            continue
+
+        gap_down = GapEvent(
+            kind="GAP_DOWN",
+            date=_to_date_str(df.index[i]),
+            prev_date=_to_date_str(df.index[i - 1]),
+            lower=hi,
+            upper=prev_low,
+        )
+
+        start_j = i + int(min_separation_days)
+        end_j = min(len(df) - 1, i + int(max_separation_days))
+        if start_j >= len(df):
+            continue
+
+        for j in range(start_j, end_j + 1):
+            prev_high = float(highs[j - 1])
+            lo = float(lows[j])
+            if not (lo > prev_high):
+                continue
+
+            gap_up = GapEvent(
+                kind="GAP_UP",
+                date=_to_date_str(df.index[j]),
+                prev_date=_to_date_str(df.index[j - 1]),
+                lower=prev_high,
+                upper=lo,
+            )
+
+            # overlap/return into prior gap zone
+            if float(gap_up.lower) <= float(gap_down.upper):
                 latest = IslandReversal(start_gap_up=gap_up, end_gap_down=gap_down)
 
     return latest
@@ -375,8 +454,24 @@ def bearish_omens(hist: pd.DataFrame, vol_avg_window: int = 20) -> BearishOmens:
     rng0 = h0 - l0
     body0 = o0 - c0
     long_black = (c0 < o0) and (rng0 > 0) and ((body0 / rng0) >= 0.6)
-    engulf = (c0 < o1) and (o0 > c1)
-    long_black_engulf = bool(long_black and engulf)
+
+    # 凶多吉少 (新版 spec): 一記重錘破三線
+    # - 需要長黑 K
+    # - 需要收盤價同時跌破 MA5/MA10/MA20
+    ma5 = float(df["Close"].rolling(window=5, min_periods=5).mean().iloc[-1]) if len(df) >= 5 else None
+    ma10 = float(df["Close"].rolling(window=10, min_periods=10).mean().iloc[-1]) if len(df) >= 10 else None
+    ma20 = float(df["Close"].rolling(window=20, min_periods=20).mean().iloc[-1]) if len(df) >= 20 else None
+
+    break_3ma = (
+        (ma5 is not None)
+        and (ma10 is not None)
+        and (ma20 is not None)
+        and (c0 < ma5)
+        and (c0 < ma10)
+        and (c0 < ma20)
+    )
+
+    long_black_engulf = bool(long_black and break_3ma)
 
     price_up_vol_down = bool((c0 > c1) and (float(df["Volume"].iloc[-1]) < float(df["Volume"].iloc[-2])))
 

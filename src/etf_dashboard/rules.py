@@ -42,6 +42,35 @@ def san_yang_kai_tai(ma5: float | None, ma10: float | None, ma20: float | None, 
     return (ma5 > ma10 > ma20) and (ma20_slope > 0)
 
 
+def san_sheng_wu_nai(
+    p_now: float | None,
+    ma5: float | None,
+    ma10: float | None,
+    ma20: float | None,
+    ma5_slope: float | None,
+    ma10_slope: float | None,
+    ma20_slope: float | None,
+) -> bool | None:
+    """三聲無奈 (bearish):
+
+    Spec (per user):
+    - MA5/MA10/MA20 slopes are all down
+    - Bearish alignment: MA20 > MA10 > MA5
+    - Price below all three MAs
+
+    Missing policy: if any required input is None => return None.
+    """
+
+    if None in (p_now, ma5, ma10, ma20, ma5_slope, ma10_slope, ma20_slope):
+        return None
+
+    slopes_down = (ma5_slope < 0) and (ma10_slope < 0) and (ma20_slope < 0)
+    bearish_align = (ma20 > ma10 > ma5)
+    price_below = (p_now < ma5) and (p_now < ma10) and (p_now < ma20)
+
+    return bool(slopes_down and bearish_align and price_below)
+
+
 def trend_regime(p_now: float | None, ma150: float | None) -> str:
     if p_now is None or ma150 is None:
         return "MISSING"
@@ -102,11 +131,13 @@ def choose_win_rate_breakdown(
     gap_filled: bool | None = None,
     gap_filled_by_close: bool | None = None,
     gap_direction_by_close: str | None = None,  # 'UP' | 'DOWN' | 'UNKNOWN'
-    island_reversal: bool | None = None,
+    island_reversal_bearish: bool | None = None,
+    island_reversal_bullish: bool | None = None,
     vol_spike_defense_broken: bool | None = None,
     bearish_long_black_engulf: bool | None = None,
     bearish_distribution_day: bool | None = None,
     bearish_price_up_vol_down: bool | None = None,
+    san_sheng_wu_nai: bool | None = None,
     clamp_min: float = 0.15,
     clamp_max: float = 0.85,
 ) -> WinRateBreakdown:
@@ -257,13 +288,22 @@ def choose_win_rate_breakdown(
         missing_fields=_missing(("gap_filled_by_close", gap_filled_by_close), ("gap_direction_by_close", gap_direction_by_close)),
     )
 
-    # Penalty: island reversal -0.10
+    # Penalty: bearish island reversal -0.10 (頂部島狀反轉)
     add_rule(
         kind=WinRateComponentKind.PENALTY,
-        name="島狀反轉",
+        name="頂部島狀反轉",
         delta_if_true=-0.10,
-        cond=(island_reversal is True),
-        missing_fields=_missing(("island_reversal", island_reversal)),
+        cond=(island_reversal_bearish is True),
+        missing_fields=_missing(("island_reversal_bearish", island_reversal_bearish)),
+    )
+
+    # Bonus: bullish island reversal +0.10 (底部島狀反轉)
+    add_rule(
+        kind=WinRateComponentKind.BONUS,
+        name="底部島狀反轉",
+        delta_if_true=0.10,
+        cond=(island_reversal_bullish is True),
+        missing_fields=_missing(("island_reversal_bullish", island_reversal_bullish)),
     )
 
     # Penalty: massive volume defense broken -0.10
@@ -275,13 +315,24 @@ def choose_win_rate_breakdown(
         missing_fields=_missing(("vol_spike_defense_broken", vol_spike_defense_broken)),
     )
 
-    # Penalty: bearish omens -0.20
+    # Penalty: 凶多吉少 -0.10 (一記重錘破三線)
+    # Spec (per user): long black K + Close below MA5/10/20.
     add_rule(
         kind=WinRateComponentKind.PENALTY,
-        name="凶多吉少(吞沒或出貨日)",
-        delta_if_true=-0.20,
-        cond=(bearish_long_black_engulf is True) or (bearish_distribution_day is True),
-        missing_fields=_missing(("bearish_long_black_engulf", bearish_long_black_engulf), ("bearish_distribution_day", bearish_distribution_day)),
+        name="凶多吉少(長黑破三線)",
+        delta_if_true=-0.10,
+        cond=(bearish_long_black_engulf is True),
+        missing_fields=_missing(("bearish_long_black_engulf", bearish_long_black_engulf)),
+        note="定義：長黑K且收盤價同時跌破 MA5/MA10/MA20",
+    )
+
+    # Penalty: 三聲無奈 -0.10
+    add_rule(
+        kind=WinRateComponentKind.PENALTY,
+        name="三聲無奈",
+        delta_if_true=-0.10,
+        cond=(san_sheng_wu_nai is True),
+        missing_fields=_missing(("san_sheng_wu_nai", san_sheng_wu_nai)),
     )
 
     # Penalty: open gap not filled -0.10
@@ -334,6 +385,8 @@ def choose_win_rate(
     bearish_distribution_day: bool | None = None,
     bearish_price_up_vol_down: bool | None = None,
 ) -> float | None:
+    # Backward-compat: legacy signature only provided a single island_reversal boolean.
+    # Treat it as bearish (penalty) to preserve prior behavior.
     return choose_win_rate_breakdown(
         p_now,
         ma150,
@@ -349,7 +402,8 @@ def choose_win_rate(
         gap_filled=gap_filled,
         gap_filled_by_close=gap_filled_by_close,
         gap_direction_by_close=gap_direction_by_close,
-        island_reversal=island_reversal,
+        island_reversal_bearish=island_reversal,
+        island_reversal_bullish=None,
         vol_spike_defense_broken=vol_spike_defense_broken,
         bearish_long_black_engulf=bearish_long_black_engulf,
         bearish_distribution_day=bearish_distribution_day,

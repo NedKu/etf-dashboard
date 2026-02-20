@@ -3,6 +3,7 @@ import pandas as pd
 from etf_dashboard.laowang import (
     bearish_omens,
     detect_island_reversal,
+    detect_island_reversal_bullish,
     detect_last_gap,
     gap_reclaim_within_3_days,
     massive_volume_levels,
@@ -60,14 +61,31 @@ def test_gap_filled_by_close_and_reclaim_3d():
 
 
 def test_bearish_omens_long_black_engulf():
-    # day1 is long black engulfing day0
-    hist = _df(
-        [
-            {"Open": 10.0, "High": 10.6, "Low": 9.9, "Close": 10.5, "Volume": 100},
-            {"Open": 10.7, "High": 10.8, "Low": 9.8, "Close": 9.9, "Volume": 150},
-        ]
+    # New spec: long black K + close below MA5/10/20 requires >= 20 rows.
+    rows = 21
+
+    close_prev = [100.0] * (rows - 1)
+    close_last = 90.0
+    close = close_prev + [close_last]
+
+    # Make last candle a long black.
+    open_ = [100.0] * (rows - 1) + [120.0]
+    high = [101.0] * (rows - 1) + [121.0]
+    low = [99.0] * (rows - 1) + [80.0]
+    vol = [100.0] * rows
+
+    hist = pd.DataFrame(
+        {
+            "Open": open_,
+            "High": high,
+            "Low": low,
+            "Close": close,
+            "Volume": vol,
+        },
+        index=pd.date_range("2024-01-01", periods=rows, freq="D"),
     )
-    o = bearish_omens(hist, vol_avg_window=2)
+
+    o = bearish_omens(hist, vol_avg_window=20)
     assert o.long_black_engulf is True
 
 
@@ -87,6 +105,24 @@ def test_detect_island_reversal_simple():
     assert island is not None
     assert island.start_gap_up.kind == "GAP_UP"
     assert island.end_gap_down.kind == "GAP_DOWN"
+
+
+def test_detect_island_reversal_bullish_simple():
+    # gap down at day1 then gap up at day4 within 2..10 days and returns into zone
+    hist = _df(
+        [
+            {"Open": 10.0, "High": 10.5, "Low": 9.9, "Close": 10.1, "Volume": 100},
+            {"Open": 9.0, "High": 9.1, "Low": 8.8, "Close": 8.9, "Volume": 110},  # gap down (high 9.1 < prev low 9.9)
+            {"Open": 8.9, "High": 9.0, "Low": 8.7, "Close": 8.8, "Volume": 105},
+            {"Open": 8.8, "High": 9.2, "Low": 8.8, "Close": 9.1, "Volume": 108},
+            {"Open": 9.8, "High": 10.2, "Low": 9.7, "Close": 10.0, "Volume": 120},  # gap up (low 9.7 > prev high 9.2)
+        ]
+    )
+
+    island = detect_island_reversal_bullish(hist, gap_threshold=0.0, min_separation_days=2, max_separation_days=10, lookback_days=30)
+    assert island is not None
+    assert island.end_gap_down.kind == "GAP_DOWN"
+    assert island.start_gap_up.kind == "GAP_UP"
 
 
 def test_massive_volume_levels_peak_only_and_break_flags():

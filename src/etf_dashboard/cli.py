@@ -16,12 +16,13 @@ from .indicators import latest_value, macd, pct, rsi, sma
 from .laowang import (
     bearish_omens,
     detect_island_reversal,
+    detect_island_reversal_bullish,
     detect_last_gap,
     gap_reclaim_within_3_days,
     massive_volume_levels,
 )
 from .report_md import ReportInputs, render_report_md
-from .rules import choose_win_rate, san_yang_kai_tai, trend_regime, volume_signal
+from .rules import choose_win_rate_breakdown, san_sheng_wu_nai, san_yang_kai_tai, trend_regime, volume_signal
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class Derived:
     ma150: float | None
     ma200: float | None
     bias60: float | None
+    ma5_slope: float | None
+    ma10_slope: float | None
     ma20_slope: float | None
     v_today: float | None
     v_avg: float | None
@@ -64,7 +67,8 @@ class Derived:
     gap_reclaim_3d: bool | None
     gap_reclaim_date: str | None
 
-    island_reversal: bool | None
+    island_reversal_bearish: bool | None
+    island_reversal_bullish: bool | None
 
     vol_spike: bool | None
     vol_spike_defense: float | None
@@ -103,11 +107,16 @@ def _compute_from_history(
 
     bias60_s = (close - ma60_s) / ma60_s * 100.0
 
-    # MA20 slope: today - 5 days ago
-    ma20_slope = None
-    ma20_clean = ma20_s.dropna()
-    if len(ma20_clean) >= 6:
-        ma20_slope = float(ma20_clean.iloc[-1] - ma20_clean.iloc[-6])
+    def _slope_5d(s: pd.Series) -> float | None:
+        clean = s.dropna()
+        if len(clean) < 6:
+            return None
+        return float(clean.iloc[-1] - clean.iloc[-6])
+
+    # MA slopes: today - 5 trading days ago
+    ma5_slope = _slope_5d(ma5_s)
+    ma10_slope = _slope_5d(ma10_s)
+    ma20_slope = _slope_5d(ma20_s)
 
     v = hist["Volume"].astype(float)
     v_avg_s = v.rolling(window=volume_avg_window, min_periods=volume_avg_window).mean()
@@ -154,14 +163,23 @@ def _compute_from_history(
     gap_reclaim_3d = reclaim.is_reclaim
     gap_reclaim_date = reclaim.reclaim_date
 
-    island = detect_island_reversal(
+    island_bear = detect_island_reversal(
         hist,
         gap_threshold=float(gap_threshold),
         min_separation_days=int(island_min_days),
         max_separation_days=int(island_max_days),
         lookback_days=int(laowang_lookback_days),
     )
-    island_reversal = island is not None
+    island_reversal_bearish = island_bear is not None
+
+    island_bull = detect_island_reversal_bullish(
+        hist,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+    island_reversal_bullish = island_bull is not None
 
     # 爆量防守/壓力 (spec): massive_vol = lookback_days 內最高量
     mv = massive_volume_levels(hist, lookback_days=int(vol_spike_window))
@@ -188,6 +206,8 @@ def _compute_from_history(
         ma150=latest_value(ma150_s),
         ma200=latest_value(ma200_s),
         bias60=latest_value(bias60_s),
+        ma5_slope=ma5_slope,
+        ma10_slope=ma10_slope,
         ma20_slope=ma20_slope,
         v_today=latest_value(v),
         v_avg=latest_value(v_avg_s),
@@ -206,7 +226,8 @@ def _compute_from_history(
         gap_fill_date_by_close=gap_fill_date_by_close,
         gap_reclaim_3d=gap_reclaim_3d,
         gap_reclaim_date=gap_reclaim_date,
-        island_reversal=island_reversal,
+        island_reversal_bearish=island_reversal_bearish,
+        island_reversal_bullish=island_reversal_bullish,
         vol_spike=vol_spike,
         vol_spike_defense=vol_spike_defense,
         vol_spike_resistance=vol_spike_resistance,
@@ -452,7 +473,48 @@ def build_report(
         elif "DOWN" in k:
             gap_dir = "DOWN"
 
-    from .rules import choose_win_rate_breakdown
+
+    # Island reversal for W: only the most recent type should count.
+    # Spec: compare bearish gap-down date vs bullish gap-up date; apply only the later one.
+    # We reuse the already-computed detailed objects (below) to derive recency.
+    island_bear = detect_island_reversal(
+        snap.history,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+    island_bull = detect_island_reversal_bullish(
+        snap.history,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+
+    bear_key = (island_bear.end_gap_down.date if island_bear is not None else None)
+    bull_key = (island_bull.start_gap_up.date if island_bull is not None else None)
+
+    eff_bear = d.island_reversal_bearish
+    eff_bull = d.island_reversal_bullish
+    if bear_key is not None and bull_key is not None:
+        if bull_key > bear_key:
+            eff_bear, eff_bull = False, True
+        elif bear_key > bull_key:
+            eff_bear, eff_bull = True, False
+        else:
+            # Same day: keep both false to avoid double-counting; date tie is effectively ambiguous.
+            eff_bear, eff_bull = False, False
+
+    s3 = san_sheng_wu_nai(
+        d.p_now,
+        d.ma5,
+        d.ma10,
+        d.ma20,
+        d.ma5_slope,
+        d.ma10_slope,
+        d.ma20_slope,
+    )
 
     w_bd = choose_win_rate_breakdown(
         d.p_now,
@@ -469,11 +531,13 @@ def build_report(
         gap_filled=d.gap_filled,
         gap_filled_by_close=d.gap_filled_by_close,
         gap_direction_by_close=gap_dir,
-        island_reversal=d.island_reversal,
+        island_reversal_bearish=eff_bear,
+        island_reversal_bullish=eff_bull,
         vol_spike_defense_broken=d.vol_spike_defense_broken,
         bearish_long_black_engulf=d.bearish_long_black_engulf,
         bearish_distribution_day=d.bearish_distribution_day,
         bearish_price_up_vol_down=d.bearish_price_up_vol_down,
+        san_sheng_wu_nai=s3,
     )
     w = w_bd.w_clamped
 
@@ -509,11 +573,13 @@ def build_report(
         d.gap_open,
         d.gap_filled,
         d.gap_filled_by_close,
-        d.island_reversal,
+        d.island_reversal_bearish,
+        d.island_reversal_bullish,
         d.vol_spike_defense_broken,
         d.bearish_long_black_engulf,
         d.bearish_distribution_day,
         d.bearish_price_up_vol_down,
+        s3,
     ]
     evidence_ok = all(x is not None for x in required)
     if not evidence_ok:
@@ -534,7 +600,14 @@ def build_report(
     # Re-compute detailed 老王 objects here (report needs dates/levels; Derived keeps booleans/levels only)
     gap = detect_last_gap(snap.history, gap_threshold=float(gap_threshold), lookback_days=int(laowang_lookback_days))
     reclaim = gap_reclaim_within_3_days(gap, snap.history)
-    island = detect_island_reversal(
+    island_bear = detect_island_reversal(
+        snap.history,
+        gap_threshold=float(gap_threshold),
+        min_separation_days=int(island_min_days),
+        max_separation_days=int(island_max_days),
+        lookback_days=int(laowang_lookback_days),
+    )
+    island_bull = detect_island_reversal_bullish(
         snap.history,
         gap_threshold=float(gap_threshold),
         min_separation_days=int(island_min_days),
@@ -575,9 +648,26 @@ def build_report(
         gap_reclaim_3d=d.gap_reclaim_3d,
         gap_reclaim_date=d.gap_reclaim_date,
         gap_reclaim_level=(reclaim.reclaim_level if reclaim.reclaim_level is not None else None),
-        island_reversal=d.island_reversal,
-        island_gap_up_date=(island.start_gap_up.date if island is not None else None),
-        island_gap_down_date=(island.end_gap_down.date if island is not None else None),
+        island_reversal_bearish=d.island_reversal_bearish,
+        island_bear_gap_up_date=(island_bear.start_gap_up.date if island_bear is not None else None),
+        island_bear_gap_down_date=(island_bear.end_gap_down.date if island_bear is not None else None),
+        island_reversal_bullish=d.island_reversal_bullish,
+        island_bull_gap_down_date=(island_bull.end_gap_down.date if island_bull is not None else None),
+        island_bull_gap_up_date=(island_bull.start_gap_up.date if island_bull is not None else None),
+        island_reversal_latest_label=(
+            "底部"
+            if (bull_key is not None and (bear_key is None or bull_key > bear_key))
+            else ("頂部" if (bear_key is not None and (bull_key is None or bear_key > bull_key)) else "none")
+        ),
+        island_reversal_latest_date=(
+            (island_bull.start_gap_up.date if island_bull is not None else None)
+            if (bull_key is not None and (bear_key is None or bull_key > bear_key))
+            else (
+                (island_bear.end_gap_down.date if island_bear is not None else None)
+                if (bear_key is not None and (bull_key is None or bear_key > bull_key))
+                else None
+            )
+        ),
         vol_spike=d.vol_spike,
         vol_spike_date=mv.date,
         vol_spike_defense=d.vol_spike_defense,
@@ -587,6 +677,7 @@ def build_report(
         bearish_long_black_engulf=d.bearish_long_black_engulf,
         bearish_price_up_vol_down=d.bearish_price_up_vol_down,
         bearish_distribution_day=d.bearish_distribution_day,
+        san_sheng_wu_nai=s3,
         v_today=d.v_today,
         v_avg=d.v_avg,
         vol_ratio=vol.vol_ratio,
