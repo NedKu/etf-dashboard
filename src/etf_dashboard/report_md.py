@@ -162,6 +162,9 @@ class ReportInputs:
     bearish_price_up_vol_down: bool | None
     bearish_distribution_day: bool | None
     san_sheng_wu_nai: bool | None
+    si_hai_you_long: bool | None  # 四海遊龍：收盤價同時高於 5MA、10MA、20MA 與 60MA
+    price_below_ma10: bool | None  # 是否跌下10日均線
+    price_below_ma20: bool | None  # 是否跌下20日均線
 
     v_today: float | None
     v_avg: float | None
@@ -270,6 +273,7 @@ def render_report_md(inp: ReportInputs) -> str:
 | **移動停利 (Trailing stop)** | P_high×(1-{trailing_stop_pct}) = {trailing_stop} | {trailing_stop_status} |
 | **老王：缺口(收盤)/收復/島狀/防守** | gap={_fmt_text(inp.gap_kind)}, zone=[{fmt(inp.gap_lower)},{fmt(inp.gap_upper)}] | filled_by_close={_fmt_bool(inp.gap_filled_by_close)} ({_fmt_text(inp.gap_fill_date_by_close)}), reclaim_3d={_fmt_bool(inp.gap_reclaim_3d)} ({_fmt_text(inp.gap_reclaim_date)}) |
 | **老王：爆量/凶多吉少/三聲無奈/三陽開泰** | massive_low={fmt(inp.vol_spike_defense)} (Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}), massive_high={fmt(inp.vol_spike_resistance)} (High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}) | 凶多吉少(長黑破三線)={_fmt_bool(inp.bearish_long_black_engulf)}, 三聲無奈={_fmt_bool(inp.san_sheng_wu_nai)}, 三陽開泰={inp.san_yang} |
+| **老王：四海遊龍/跌破均線** | 四海遊龍(同時高於5MA、10MA、20MA、60MA)={_fmt_bool(inp.si_hai_you_long)} | 跌下10日均線={_fmt_bool(inp.price_below_ma10)}, 跌下20日均線={_fmt_bool(inp.price_below_ma20)} |
 | **短期均線** | MA5={fmt(inp.ma5)}, MA10={fmt(inp.ma10)} | - |
 | **中期均線** | MA20={ma20}, MA50={fmt(inp.ma50)} | 生命線守護（MA20）：{ma_guard_status} |
 | **長期均線** | MA60={ma60}, MA150={fmt(inp.ma150)}, MA200={fmt(inp.ma200)} | 趨勢位階：{inp.trend_regime} |
@@ -334,6 +338,8 @@ def render_report_md(inp: ReportInputs) -> str:
 - 凶多吉少（長黑破三線）：{_fmt_bool(inp.bearish_long_black_engulf)}（長黑K 且 Close 同時跌破 MA5/MA10/MA20）
 - 凶多吉少（輔助觀察，不計分）：dist_day={_fmt_bool(inp.bearish_distribution_day)}, up_vol_down={_fmt_bool(inp.bearish_price_up_vol_down)}
 - 三聲無奈：{_fmt_bool(inp.san_sheng_wu_nai)}（MA5/10/20 斜率皆下彎 + MA20>MA10>MA5 + P_now 低於 MA5/10/20）
+- 四海遊龍：{_fmt_bool(inp.si_hai_you_long)}（收盤價同時高於 MA5、MA10、MA20 與 MA60）
+- 大盤跌破均線：跌下10日均線={_fmt_bool(inp.price_below_ma10)}；跌下20日均線={_fmt_bool(inp.price_below_ma20)}
 
 #### 2.4 凱利公式（Kelly Criterion）逐步代入
 - 勝率 W（規則推導）：
@@ -351,7 +357,7 @@ def render_report_md(inp: ReportInputs) -> str:
 ### 3. 👨‍⚕️ 綜合診斷
 - 量價動能（哲哲）：量能判定 = {inp.vol_label}（倍數 {fmt(inp.vol_ratio, 2)}）;60 日乖離率 = {bias60_pct}%;MACD 動能柱 = {fmt(inp.macd_hist)}
 - 趨勢紀律（掃地僧）：長線位階 = {inp.trend_regime}；大盤濾網 = {inp.bench_regime}
-- 線型結構（老王）：凶多吉少(長黑破三線) = {_fmt_bool(inp.bearish_long_black_engulf)}；三聲無奈 = {_fmt_bool(inp.san_sheng_wu_nai)}；三陽開泰 = {inp.san_yang}
+- 線型結構（老王）：凶多吉少(長黑破三線) = {_fmt_bool(inp.bearish_long_black_engulf)}；三聲無奈 = {_fmt_bool(inp.san_sheng_wu_nai)}；四海遊龍 = {_fmt_bool(inp.si_hai_you_long)}；三陽開泰 = {inp.san_yang}；跌破均線(MA10) = {_fmt_bool(inp.price_below_ma10)}；跌破均線(MA20) = {_fmt_bool(inp.price_below_ma20)}
   ；島狀反轉(最近)：{_fmt_text(inp.island_reversal_latest_label)}（date={_fmt_text(inp.island_reversal_latest_date)}）
   ；缺口：{_fmt_text(inp.gap_kind)}（open={_fmt_bool(inp.gap_open)}, filled={_fmt_bool(inp.gap_filled)}）
   ；爆量防守/壓力：low={fmt(inp.vol_spike_defense)}（Low_broken={_fmt_bool(inp.vol_spike_defense_broken)}）, high={fmt(inp.vol_spike_resistance)}（High_broken={_fmt_bool(inp.vol_spike_resistance_broken)}）

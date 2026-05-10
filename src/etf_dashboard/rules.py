@@ -71,6 +71,52 @@ def san_sheng_wu_nai(
     return bool(slopes_down and bearish_align and price_below)
 
 
+def si_hai_you_long(p_now: float | None, ma5: float | None, ma10: float | None, ma20: float | None, ma60: float | None) -> bool | None:
+    """四海遊龍 (bullish):
+
+    Spec (per user):
+    - 收盤價必須同時高於 5MA、10MA、20MA 與 60MA
+    - Price above all four MAs
+
+    Missing policy: if any required input is None => return None.
+    """
+
+    if None in (p_now, ma5, ma10, ma20, ma60):
+        return None
+
+    return bool(p_now > ma5 and p_now > ma10 and p_now > ma20 and p_now > ma60)
+
+
+def price_below_ma10(p_now: float | None, ma10: float | None) -> bool | None:
+    """大盤是否跌下10日均線:
+
+    Spec (per user):
+    - Price crosses below MA10
+
+    Missing policy: if any required input is None => return None.
+    """
+
+    if None in (p_now, ma10):
+        return None
+
+    return bool(p_now < ma10)
+
+
+def price_below_ma20(p_now: float | None, ma20: float | None) -> bool | None:
+    """是否跌下20日均線:
+
+    Spec (per user):
+    - Price crosses below MA20
+
+    Missing policy: if any required input is None => return None.
+    """
+
+    if None in (p_now, ma20):
+        return None
+
+    return bool(p_now < ma20)
+
+
 def trend_regime(p_now: float | None, ma150: float | None) -> str:
     if p_now is None or ma150 is None:
         return "MISSING"

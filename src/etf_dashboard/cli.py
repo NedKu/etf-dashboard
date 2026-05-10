@@ -22,7 +22,16 @@ from .laowang import (
     massive_volume_levels,
 )
 from .report_md import ReportInputs, render_report_md
-from .rules import choose_win_rate_breakdown, san_sheng_wu_nai, san_yang_kai_tai, trend_regime, volume_signal
+from .rules import (
+    choose_win_rate_breakdown,
+    price_below_ma10,
+    price_below_ma20,
+    san_sheng_wu_nai,
+    san_yang_kai_tai,
+    si_hai_you_long,
+    trend_regime,
+    volume_signal,
+)
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,11 @@ class Derived:
     bearish_long_black_engulf: bool | None
     bearish_price_up_vol_down: bool | None
     bearish_distribution_day: bool | None
+
+    # 四海遊龍 / 跌破均線
+    si_hai_you_long: bool | None  # 收盤價同時高於 5MA、10MA、20MA 與 60MA
+    price_below_ma10: bool | None  # 是否跌下10日均線
+    price_below_ma20: bool | None  # 是否跌下20日均線
 
 
 def _compute_from_history(
@@ -194,6 +208,11 @@ def _compute_from_history(
     bearish_price_up_vol_down = omen.price_up_vol_down
     bearish_distribution_day = omen.distribution_day
 
+    # 四海遊龍 / 跌破均線 (new indicators)
+    si_hai = si_hai_you_long(p_now, latest_value(ma5_s), latest_value(ma10_s), latest_value(ma20_s), latest_value(ma60_s))
+    price_below_10 = price_below_ma10(p_now, latest_value(ma10_s))
+    price_below_20 = price_below_ma20(p_now, latest_value(ma20_s))
+
     return Derived(
         p_now=p_now,
         open_=latest_value(open_),
@@ -236,6 +255,9 @@ def _compute_from_history(
         bearish_long_black_engulf=bearish_long_black_engulf,
         bearish_price_up_vol_down=bearish_price_up_vol_down,
         bearish_distribution_day=bearish_distribution_day,
+        si_hai_you_long=si_hai,
+        price_below_ma10=price_below_10,
+        price_below_ma20=price_below_20,
     )
 
 
@@ -678,6 +700,9 @@ def build_report(
         bearish_price_up_vol_down=d.bearish_price_up_vol_down,
         bearish_distribution_day=d.bearish_distribution_day,
         san_sheng_wu_nai=s3,
+        si_hai_you_long=d.si_hai_you_long,
+        price_below_ma10=d.price_below_ma10,
+        price_below_ma20=d.price_below_ma20,
         v_today=d.v_today,
         v_avg=d.v_avg,
         vol_ratio=vol.vol_ratio,
@@ -822,3 +847,11 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+

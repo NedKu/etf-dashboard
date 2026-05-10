@@ -309,7 +309,7 @@ def detect_island_reversal(
             )
 
             # overlap/return into prior gap zone
-            if float(gap_down.upper) >= float(gap_up.lower):
+            if max(float(gap_up.lower), float(gap_down.lower)) <= min(float(gap_up.upper), float(gap_down.upper)):
                 latest = IslandReversal(start_gap_up=gap_up, end_gap_down=gap_down)
 
     return latest
@@ -385,7 +385,7 @@ def detect_island_reversal_bullish(
             )
 
             # overlap/return into prior gap zone
-            if float(gap_up.lower) <= float(gap_down.upper):
+            if max(float(gap_up.lower), float(gap_down.lower)) <= min(float(gap_up.upper), float(gap_down.upper)):
                 latest = IslandReversal(start_gap_up=gap_up, end_gap_down=gap_down)
 
     return latest

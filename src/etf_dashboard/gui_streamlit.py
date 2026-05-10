@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+# Add src directory to Python path to resolve module imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
