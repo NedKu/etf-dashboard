@@ -117,6 +117,24 @@ def main() -> None:
             step=0.25,
             help="作為判斷條件：只顯示/標示盈虧比 >= 此值的交易計畫 (R = (target-entry)/(entry-stop))；0 表示不限制",
         )
+        st.divider()
+        st.subheader("📅 報告日期")
+        use_custom_date = st.checkbox(
+            "指定歷史日期（不勾選則以今天為基準）",
+            value=False,
+            help="勾選後可輸入任意歷史日期，所有指標/信號將以該日止的數據重新計算",
+        )
+        if use_custom_date:
+            _today = date.today()
+            report_date_val = st.date_input(
+                "報告日期",
+                value=_today,
+                max_value=_today,
+                help="選擇要生成的報告所屬日期（將截取該日之前的數據進行模擬）",
+            )
+        else:
+            report_date_val = None
+
 
         run = st.button("Generate")
 
@@ -273,8 +291,10 @@ def main() -> None:
                         laowang_lookback_days=int(laowang_lookback),
                         vol_spike_mult=2.0,
                         vol_spike_window=int(vol_window),
+                        report_date=report_date_val,
                     )
-                    st.success(f"Report generated: {out_path}")
+                    date_label = f" (日期: {report_date_val})" if report_date_val is not None else ""
+                    st.success(f"Report generated: {out_path}{date_label}")
                 except Exception as e:
                     st.exception(e)
 

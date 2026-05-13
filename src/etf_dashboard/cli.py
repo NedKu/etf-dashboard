@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -403,6 +403,7 @@ def build_report(
     laowang_lookback_days: int = 120,
     vol_spike_mult: float = 2.0,
     vol_spike_window: int = 20,
+    report_date=None,  # date | None
 ) -> Path:
     if not (0.0 < stop_loss_pct < 0.5):
         raise ValueError("stop_loss_pct must be between 0 and 0.5 (e.g., 0.05 for 5%)")
@@ -416,8 +417,20 @@ def build_report(
     snap = fetch_snapshot(ticker, lookback_days=lookback_days)
     bench = fetch_snapshot(benchmark, lookback_days=lookback_days)
 
+    # Slice to report_date if specified (historical analysis mode).
+    if report_date is not None:
+        snap_hist = snap.history[snap.history.index.date <= report_date].copy()
+        bench_hist = bench.history[bench.history.index.date <= report_date].copy()
+        if snap_hist.empty:
+            raise ValueError(f"No history data available on or before {report_date} for {ticker}")
+        if bench_hist.empty:
+            raise ValueError(f"No history data available on or before {report_date} for {benchmark}")
+    else:
+        snap_hist = snap.history
+        bench_hist = bench.history
+
     d = _compute_from_history(
-        snap.history,
+        snap_hist,
         volume_avg_window=volume_avg_window,
         trailing_stop_pct=trailing_stop_pct,
         gap_threshold=gap_threshold,
@@ -427,9 +440,9 @@ def build_report(
         vol_spike_mult=vol_spike_mult,
         vol_spike_window=vol_spike_window,
     )
-    b = _compute_from_history(bench.history, volume_avg_window=volume_avg_window, trailing_stop_pct=trailing_stop_pct)
+    b = _compute_from_history(bench_hist, volume_avg_window=volume_avg_window, trailing_stop_pct=trailing_stop_pct)
 
-    p_high, p_high_src = _p_high_from_info_or_history(snap.info, snap.history)
+    p_high, p_high_src = _p_high_from_info_or_history(snap.info, snap_hist)
 
     notes: list[str] = [
         f"P_now/MA/RSI/MACD/均量皆以 Yahoo 日線 history 計算（Close/Volume）。",
@@ -500,14 +513,14 @@ def build_report(
     # Spec: compare bearish gap-down date vs bullish gap-up date; apply only the later one.
     # We reuse the already-computed detailed objects (below) to derive recency.
     island_bear = detect_island_reversal(
-        snap.history,
+        snap_hist,
         gap_threshold=float(gap_threshold),
         min_separation_days=int(island_min_days),
         max_separation_days=int(island_max_days),
         lookback_days=int(laowang_lookback_days),
     )
     island_bull = detect_island_reversal_bullish(
-        snap.history,
+        snap_hist,
         gap_threshold=float(gap_threshold),
         min_separation_days=int(island_min_days),
         max_separation_days=int(island_max_days),
@@ -617,13 +630,18 @@ def build_report(
         kelly_f=kelly_f_capped,
     )
 
-    local_now = datetime.now().astimezone()
+    # Use report_date for timestamp if specified, else current local time.
+    if report_date is not None:
+        from datetime import time as _dt_time
+        local_now = datetime.combine(report_date, _dt_time.min).astimezone()
+    else:
+        local_now = datetime.now().astimezone()
 
     # Re-compute detailed 老王 objects here (report needs dates/levels; Derived keeps booleans/levels only)
-    gap = detect_last_gap(snap.history, gap_threshold=float(gap_threshold), lookback_days=int(laowang_lookback_days))
-    reclaim = gap_reclaim_within_3_days(gap, snap.history)
+    gap = detect_last_gap(snap_hist, gap_threshold=float(gap_threshold), lookback_days=int(laowang_lookback_days))
+    reclaim = gap_reclaim_within_3_days(gap, snap_hist)
     island_bear = detect_island_reversal(
-        snap.history,
+        snap_hist,
         gap_threshold=float(gap_threshold),
         min_separation_days=int(island_min_days),
         max_separation_days=int(island_max_days),
@@ -636,7 +654,7 @@ def build_report(
         max_separation_days=int(island_max_days),
         lookback_days=int(laowang_lookback_days),
     )
-    mv = massive_volume_levels(snap.history, lookback_days=int(vol_spike_window))
+    mv = massive_volume_levels(snap_hist, lookback_days=int(vol_spike_window))
 
     inp = ReportInputs(
         ticker=ticker,
@@ -747,7 +765,7 @@ def build_report(
     md = render_report_md(inp)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    day = local_now.strftime("%Y%m%d")
+    day = report_date.strftime("%Y%m%d") if report_date is not None else local_now.strftime("%Y%m%d")
     out_path = out_dir / f"{ticker}_{day}.md"
     out_path.write_text(md, encoding="utf-8")
     return out_path

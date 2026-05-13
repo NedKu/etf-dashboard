@@ -318,38 +318,54 @@ def choose_win_rate_breakdown(
         note="僅在 Bull base 生效" if bull else "Bear base 不加分",
     )
 
-    # Gap close direction: +0.10 if DOWN, -0.10 if UP
+    # ── 缺口方向 × 封閉狀態 複合規則（避免重複計算） ──
+    # 已封閉的缺口不再另外計分；島狀反轉必須同時有缺口未封閉才生效。
+
+    # Helper: gap is currently open (not filled by close)
+    _gap_is_open = (gap_filled_by_close is False)
+
+    # BONUS: 向上跳空缺口收盤未封閉 +0.10
+    #   市場強势上漲後仍维持缺口，利多信號。
     add_rule(
         kind=WinRateComponentKind.BONUS,
-        name="缺口收盤封閉(向下跳空)",
+        name="向上跳空缺口未封閉(強势上漲)",
         delta_if_true=0.10,
-        cond=(gap_filled_by_close is True) and (gap_direction_by_close == "DOWN"),
+        cond=_gap_is_open and (gap_direction_by_close == "UP"),
         missing_fields=_missing(("gap_filled_by_close", gap_filled_by_close), ("gap_direction_by_close", gap_direction_by_close)),
-    )
-    add_rule(
-        kind=WinRateComponentKind.PENALTY,
-        name="缺口收盤封閉(向上跳空)",
-        delta_if_true=-0.10,
-        cond=(gap_filled_by_close is True) and (gap_direction_by_close == "UP"),
-        missing_fields=_missing(("gap_filled_by_close", gap_filled_by_close), ("gap_direction_by_close", gap_direction_by_close)),
+        note="向上跳空缺口尚未封閉，市場強势未回测",
     )
 
-    # Penalty: bearish island reversal -0.10 (頂部島狀反轉)
+    # PENALTY: 向下跳空缺口收盤未封閉 -0.10
+    #   下漨風險持續存在，利空信號。
     add_rule(
         kind=WinRateComponentKind.PENALTY,
-        name="頂部島狀反轉",
+        name="向下跳空缺口未封閉(下漨風險)",
         delta_if_true=-0.10,
-        cond=(island_reversal_bearish is True),
-        missing_fields=_missing(("island_reversal_bearish", island_reversal_bearish)),
+        cond=_gap_is_open and (gap_direction_by_close == "DOWN"),
+        missing_fields=_missing(("gap_filled_by_close", gap_filled_by_close), ("gap_direction_by_close", gap_direction_by_close)),
+        note="向下跳空缺口尚未封閉，下漨動能尚存",
     )
 
-    # Bonus: bullish island reversal +0.10 (底部島狀反轉)
+    # PENALTY: 頂部島狀反轉 且 缺口未封閉 -0.10
+    #   島狀 + 缺口未回填 = 測際軸轉信號確認。
+    add_rule(
+        kind=WinRateComponentKind.PENALTY,
+        name="頂部島狀反轉(缺口未封閉)",
+        delta_if_true=-0.10,
+        cond=(island_reversal_bearish is True) and _gap_is_open,
+        missing_fields=_missing(("island_reversal_bearish", island_reversal_bearish), ("gap_filled_by_close", gap_filled_by_close)),
+        note="頂部島狀且缺口尚未封閉，空頭信號加強",
+    )
+
+    # BONUS: 底部島狀反轉 且 缺口未封閉 +0.10
+    #   島狀 + 缺口未回测 = 底部軸轉信號確認。
     add_rule(
         kind=WinRateComponentKind.BONUS,
-        name="底部島狀反轉",
+        name="底部島狀反轉(缺口未封閉)",
         delta_if_true=0.10,
-        cond=(island_reversal_bullish is True),
-        missing_fields=_missing(("island_reversal_bullish", island_reversal_bullish)),
+        cond=(island_reversal_bullish is True) and _gap_is_open,
+        missing_fields=_missing(("island_reversal_bullish", island_reversal_bullish), ("gap_filled_by_close", gap_filled_by_close)),
+        note="底部島狀且缺口尚未封閉，多頭信號加強",
     )
 
     # Penalty: massive volume defense broken -0.10
@@ -379,15 +395,6 @@ def choose_win_rate_breakdown(
         delta_if_true=-0.10,
         cond=(san_sheng_wu_nai is True),
         missing_fields=_missing(("san_sheng_wu_nai", san_sheng_wu_nai)),
-    )
-
-    # Penalty: open gap not filled -0.10
-    add_rule(
-        kind=WinRateComponentKind.PENALTY,
-        name="開盤缺口未封閉(保守風險)",
-        delta_if_true=-0.10,
-        cond=(gap_open is True) and (gap_filled is False),
-        missing_fields=_missing(("gap_open", gap_open), ("gap_filled", gap_filled)),
     )
 
     w_raw = float(round(base_w + bonus_total + penalty_total, 4))
