@@ -1,25 +1,46 @@
 [build-system]
-requires = ["setuptools>=65"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "etf-dashboard"
+name = "stock-per-pbr-trend"
 version = "0.1.0"
-description = "Evidence-first ETF/Stock dashboard CLI (Yahoo Finance)"
+description = "Streamlit app for stock volume breakout + PER/PBR trend analysis using Yahoo Finance data"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "" }]
 dependencies = [
-  "yfinance>=1.2.0",
-  "pandas>=2.0.0",
-  "numpy>=2.0.0",
-  "streamlit>=1.54.0",
+  "streamlit>=1.30",
+  "yfinance>=0.2",
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "plotly>=5.18",
+  "scipy>=1.10",
 ]
 
-[project.scripts]
-etf-dashboard = "etf_dashboard.cli:main"
-etf-dashboard-gui = "etf_dashboard.gui_streamlit:main"
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+  "black>=24.0",
+  "pre-commit>=3.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.black]
+line-length = 100
+
+typechecking-mode = "basic"
